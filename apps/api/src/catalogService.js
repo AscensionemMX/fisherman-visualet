@@ -157,6 +157,11 @@ function shouldUseCache(now) {
 export async function getCatalogProducts(config, options = {}) {
   const now = Date.now();
   const audience = options.audience === "seller" ? "seller" : "customer";
+  const page = Math.max(0, Number.parseInt(options.page ?? "0", 10) || 0);
+  const limit = Math.min(
+    500,
+    Math.max(1, Number.parseInt(options.limit ?? "100", 10) || 100),
+  );
   let source = "dolibarr";
 
   if (!shouldUseCache(now)) {
@@ -182,15 +187,18 @@ export async function getCatalogProducts(config, options = {}) {
     if (audience === "seller") return true;
     return product.visibility !== "hidden_customer" && product.visibility !== "seller_only";
   });
+  const start = page * limit;
+  const paginatedProducts = visibleProducts.slice(start, start + limit);
 
   return {
-    items: visibleProducts.map((product) => toAudienceProduct(product, audience)),
+    items: paginatedProducts.map((product) => toAudienceProduct(product, audience)),
     source,
     lastSyncedAt: catalogCache.syncedAt,
     pagination: {
-      page: Number.parseInt(options.page ?? "0", 10),
-      limit: Number.parseInt(options.limit ?? "100", 10),
-      hasMore: visibleProducts.length >= Number.parseInt(options.limit ?? "100", 10),
+      page,
+      limit,
+      total: visibleProducts.length,
+      hasMore: start + limit < visibleProducts.length,
     },
   };
 }

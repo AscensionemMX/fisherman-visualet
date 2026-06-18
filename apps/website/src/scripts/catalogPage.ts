@@ -22,6 +22,12 @@ type ApiCatalogResponse = {
   items: ApiCatalogProduct[];
   source?: "dolibarr" | "cache";
   lastSyncedAt?: string;
+  pagination?: {
+    page: number;
+    limit: number;
+    total?: number;
+    hasMore: boolean;
+  };
 };
 
 type CachedCatalogResponse = ApiCatalogResponse & {
@@ -30,6 +36,7 @@ type CachedCatalogResponse = ApiCatalogResponse & {
 
 const fallbackProducts = catalogProducts;
 const MAX_RENDERED_PRODUCTS = 120;
+const CATALOG_PAGE_SIZE = 80;
 const PRODUCTION_VISUALET_API_URL = "https://navajowhite-sardine-989084.hostingersite.com";
 const CATALOG_STORAGE_KEY = "fisherman.catalog.products.v1";
 
@@ -130,6 +137,7 @@ function initCatalogPage() {
   const availabilitySelect = getRequiredElement<HTMLSelectElement>("#catalog-availability");
   const categoryButtonsContainer = getRequiredElement<HTMLDivElement>("#catalog-category-buttons");
   const grid = getRequiredElement<HTMLDivElement>("#catalog-grid");
+  const loadMoreButton = getRequiredElement<HTMLButtonElement>("#catalog-load-more");
   const catalogSource = getRequiredElement<HTMLParagraphElement>("#catalog-source");
   const catalogCount = getRequiredElement<HTMLParagraphElement>("#catalog-count");
   const emptyState = getRequiredElement<HTMLDivElement>("#catalog-empty");
@@ -164,6 +172,10 @@ function initCatalogPage() {
   let cart: CartItem[] = [];
   let imageZoom = 1;
   let toastTimeout: number | undefined;
+  let nextCatalogPage = 0;
+  let hasMoreCatalogProducts = false;
+  let isLoadingCatalogProducts = false;
+  let catalogTotal: number | undefined;
 
   function formatPrice(value: number) {
     return new Intl.NumberFormat("es-MX", {
@@ -213,10 +225,19 @@ function initCatalogPage() {
 
   function storeCatalog(data: ApiCatalogResponse) {
     try {
+      const currentCatalog = readStoredCatalog();
+      const existingItems = currentCatalog?.items ?? [];
+      const itemsById = new Map<string, ApiCatalogProduct>();
+
+      [...existingItems, ...data.items].forEach((item) => {
+        itemsById.set(item.dolibarrProductId, item);
+      });
+
       window.localStorage.setItem(
         CATALOG_STORAGE_KEY,
         JSON.stringify({
           ...data,
+          items: Array.from(itemsById.values()),
           cachedAt: new Date().toISOString(),
         }),
       );
@@ -225,8 +246,21 @@ function initCatalogPage() {
     }
   }
 
-  function useCatalogData(data: ApiCatalogResponse, sourceLabel: string) {
-    products = data.items.map(mapApiProduct);
+  function useCatalogData(data: ApiCatalogResponse, sourceLabel: string, append = false) {
+    const mappedProducts = data.items.map(mapApiProduct);
+
+    if (append) {
+      const productsById = new Map<string, CatalogProduct>();
+
+      [...products, ...mappedProducts].forEach((product) => {
+        productsById.set(product.id, product);
+      });
+
+      products = Array.from(productsById.values());
+    } else {
+      products = mappedProducts;
+    }
+
     renderCategoryFilters();
 
     const syncedAt = data.lastSyncedAt
@@ -234,16 +268,36 @@ function initCatalogPage() {
       : "sin fecha";
 
     updateCatalogSource(`${sourceLabel} - actualizado ${syncedAt}`);
+    catalogTotal = data.pagination?.total ?? catalogTotal;
+    hasMoreCatalogProducts = Boolean(data.pagination?.hasMore);
+    nextCatalogPage = (data.pagination?.page ?? nextCatalogPage) + 1;
 
     renderProducts();
   }
 
-  async function loadProductsFromApi() {
+  function updateLoadMoreButton() {
+    loadMoreButton.classList.toggle("hidden", !hasMoreCatalogProducts);
+    loadMoreButton.disabled = isLoadingCatalogProducts;
+    loadMoreButton.textContent = isLoadingCatalogProducts
+      ? "Cargando..."
+      : catalogTotal
+        ? `Ver mas productos (${products.length} de ${catalogTotal})`
+        : "Ver mas productos";
+  }
+
+  async function loadProductsFromApi(page = 0, append = false) {
+    if (isLoadingCatalogProducts) return;
+
+    isLoadingCatalogProducts = true;
+    updateLoadMoreButton();
+
     try {
-      updateCatalogSource("Sincronizando catalogo...");
+      updateCatalogSource(
+        page === 0 ? "Sincronizando catalogo..." : "Cargando mas productos...",
+      );
 
       const response = await fetch(
-        `${visualetApiUrl}/catalog/products?audience=customer&limit=5000`,
+        `${visualetApiUrl}/catalog/products?audience=customer&page=${page}&limit=${CATALOG_PAGE_SIZE}`,
       );
 
       if (!response.ok) {
@@ -257,21 +311,36 @@ function initCatalogPage() {
       }
 
       storeCatalog(data);
-      useCatalogData(data, `Datos Fisherman (${data.source ?? "api"})`);
+      useCatalogData(data, `Datos Fisherman (${data.source ?? "api"})`, append);
     } catch (error) {
       console.warn("Using local catalog fallback:", error);
 
       const storedCatalog = readStoredCatalog();
 
       if (storedCatalog) {
-        useCatalogData(storedCatalog, "Datos Fisherman guardados");
+        useCatalogData(
+          {
+            ...storedCatalog,
+            pagination: {
+              page: 0,
+              limit: storedCatalog.items.length,
+              total: storedCatalog.items.length,
+              hasMore: false,
+            },
+          },
+          "Datos Fisherman guardados",
+        );
         return;
       }
 
       products = fallbackProducts;
       renderCategoryFilters();
       updateCatalogSource("Catalogo local de respaldo");
+      hasMoreCatalogProducts = false;
       renderProducts();
+    } finally {
+      isLoadingCatalogProducts = false;
+      updateLoadMoreButton();
     }
   }
 
@@ -842,6 +911,10 @@ function initCatalogPage() {
     renderProducts();
   });
 
+  loadMoreButton.addEventListener("click", () => {
+    void loadProductsFromApi(nextCatalogPage, true);
+  });
+
   document.addEventListener("click", (event) => {
     const target = event.target;
 
@@ -895,7 +968,7 @@ function initCatalogPage() {
   renderCategoryFilters();
   setCategory("todos");
   renderCart();
-  void loadProductsFromApi();
+  void loadProductsFromApi(0, false);
 }
 
 if (document.readyState === "loading") {
