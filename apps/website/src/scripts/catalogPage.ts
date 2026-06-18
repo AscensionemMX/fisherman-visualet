@@ -24,9 +24,14 @@ type ApiCatalogResponse = {
   lastSyncedAt?: string;
 };
 
+type CachedCatalogResponse = ApiCatalogResponse & {
+  cachedAt?: string;
+};
+
 const fallbackProducts = catalogProducts;
 const MAX_RENDERED_PRODUCTS = 120;
 const PRODUCTION_VISUALET_API_URL = "https://navajowhite-sardine-989084.hostingersite.com";
+const CATALOG_STORAGE_KEY = "fisherman.catalog.products.v1";
 
 function getVisualetApiUrl() {
   if (import.meta.env.PUBLIC_VISUALET_API_URL) {
@@ -50,6 +55,10 @@ function getRequiredElement<T extends Element>(selector: string) {
   }
 
   return element;
+}
+
+function getOptionalElement<T extends Element>(selector: string) {
+  return document.querySelector<T>(selector);
 }
 
 function normalizeText(value: string) {
@@ -128,11 +137,14 @@ function initCatalogPage() {
   const cartEmpty = getRequiredElement<HTMLDivElement>("#cart-empty");
   const cartSummary = getRequiredElement<HTMLParagraphElement>("#cart-summary");
   const cartTotal = getRequiredElement<HTMLParagraphElement>("#cart-total");
+  const mobileCartSummary = getOptionalElement<HTMLParagraphElement>("#mobile-cart-summary");
+  const mobileCartTotal = getOptionalElement<HTMLParagraphElement>("#mobile-cart-total");
   const cartProgressLabel = getRequiredElement<HTMLParagraphElement>("#cart-progress-label");
   const cartProgressPercent = getRequiredElement<HTMLParagraphElement>("#cart-progress-percent");
   const cartProgressBar = getRequiredElement<HTMLDivElement>("#cart-progress-bar");
   const cartProgressHint = getRequiredElement<HTMLParagraphElement>("#cart-progress-hint");
   const sendOrder = getRequiredElement<HTMLAnchorElement>("#send-order");
+  const mobileSendOrder = getOptionalElement<HTMLAnchorElement>("#mobile-send-order");
   const clearCart = getRequiredElement<HTMLButtonElement>("#clear-cart");
   const recommendationsPanel = getRequiredElement<HTMLDivElement>("#recommendations-panel");
   const recommendationsList = getRequiredElement<HTMLDivElement>("#recommendations-list");
@@ -181,6 +193,51 @@ function initCatalogPage() {
     catalogSource.textContent = status;
   }
 
+  function readStoredCatalog(): CachedCatalogResponse | null {
+    try {
+      const rawCatalog = window.localStorage.getItem(CATALOG_STORAGE_KEY);
+
+      if (!rawCatalog) return null;
+
+      const parsed = JSON.parse(rawCatalog) as CachedCatalogResponse;
+
+      if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
+        return null;
+      }
+
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function storeCatalog(data: ApiCatalogResponse) {
+    try {
+      window.localStorage.setItem(
+        CATALOG_STORAGE_KEY,
+        JSON.stringify({
+          ...data,
+          cachedAt: new Date().toISOString(),
+        }),
+      );
+    } catch {
+      // localStorage may be unavailable in private or restricted contexts.
+    }
+  }
+
+  function useCatalogData(data: ApiCatalogResponse, sourceLabel: string) {
+    products = data.items.map(mapApiProduct);
+    renderCategoryFilters();
+
+    const syncedAt = data.lastSyncedAt
+      ? new Date(data.lastSyncedAt).toLocaleString("es-MX")
+      : "sin fecha";
+
+    updateCatalogSource(`${sourceLabel} - actualizado ${syncedAt}`);
+
+    renderProducts();
+  }
+
   async function loadProductsFromApi() {
     try {
       updateCatalogSource("Sincronizando catalogo...");
@@ -199,20 +256,18 @@ function initCatalogPage() {
         throw new Error("Visualet API response is missing items");
       }
 
-      products = data.items.map(mapApiProduct);
-      renderCategoryFilters();
-
-      const syncedAt = data.lastSyncedAt
-        ? new Date(data.lastSyncedAt).toLocaleString("es-MX")
-        : "sin fecha";
-
-      updateCatalogSource(
-        `Datos Fisherman (${data.source ?? "api"}) - actualizado ${syncedAt}`,
-      );
-
-      renderProducts();
+      storeCatalog(data);
+      useCatalogData(data, `Datos Fisherman (${data.source ?? "api"})`);
     } catch (error) {
       console.warn("Using local catalog fallback:", error);
+
+      const storedCatalog = readStoredCatalog();
+
+      if (storedCatalog) {
+        useCatalogData(storedCatalog, "Datos Fisherman guardados");
+        return;
+      }
+
       products = fallbackProducts;
       renderCategoryFilters();
       updateCatalogSource("Catalogo local de respaldo");
@@ -375,34 +430,34 @@ function initCatalogPage() {
       const article = document.createElement("article");
 
       article.className =
-        "grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-cyan-200 hover:shadow-md lg:grid-cols-[6.5rem_minmax(0,1fr)_9rem_10rem]";
+        "grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 rounded-2xl border border-slate-200 bg-white p-2.5 shadow-sm transition hover:border-cyan-200 hover:shadow-md md:grid-cols-[6.5rem_minmax(0,1fr)_9rem_10rem] md:gap-4 md:p-4";
 
       article.innerHTML = `
         <button
           type="button"
           data-view-image="${escapeHtml(product.id)}"
-          class="group relative aspect-square overflow-hidden rounded-2xl border border-slate-200 bg-slate-50"
+          class="group relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-50 md:rounded-2xl"
           aria-label="Ver foto de ${escapeHtml(product.name)}"
         >
           <img
             src="${escapeHtml(getProductImageUrl(product))}"
             alt="Foto de ${escapeHtml(product.name)}"
             loading="lazy"
-            class="h-full w-full object-contain p-2 transition group-hover:scale-105"
+            class="h-full w-full object-contain p-1.5 transition group-hover:scale-105 md:p-2"
           />
 
-          <span class="absolute inset-x-2 bottom-2 rounded-full bg-slate-950/78 px-2 py-1 text-[0.65rem] font-black uppercase tracking-[0.14em] text-white opacity-0 transition group-hover:opacity-100">
+          <span class="absolute inset-x-1 bottom-1 rounded-full bg-slate-950/78 px-2 py-0.5 text-[0.58rem] font-black uppercase tracking-[0.1em] text-white opacity-0 transition group-hover:opacity-100 md:inset-x-2 md:bottom-2 md:py-1 md:text-[0.65rem] md:tracking-[0.14em]">
             Zoom
           </span>
         </button>
 
         <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="rounded-full border px-3 py-1 text-xs font-black ${getAvailabilityClasses(availability)}">
+          <div class="flex flex-wrap items-center gap-1.5 md:gap-2">
+            <span class="rounded-full border px-2 py-0.5 text-[0.62rem] font-black md:px-3 md:py-1 md:text-xs ${getAvailabilityClasses(availability)}">
               ${escapeHtml(availability)}
             </span>
 
-            <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500">
+            <span class="hidden rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500 sm:inline-flex">
               ${escapeHtml(getPrimaryTag(product))}
             </span>
 
@@ -418,39 +473,39 @@ function initCatalogPage() {
               .join("")}
           </div>
 
-          <h3 class="mt-3 text-lg font-black leading-snug text-slate-950">
+          <h3 class="mt-1.5 line-clamp-2 text-sm font-black leading-snug text-slate-950 md:mt-3 md:text-lg">
             ${escapeHtml(product.name)}
           </h3>
 
-          <p class="mt-2 line-clamp-2 text-sm leading-6 text-slate-500">
+          <p class="mt-1 hidden line-clamp-1 text-xs leading-5 text-slate-500 sm:block md:mt-2 md:line-clamp-2 md:text-sm md:leading-6">
             ${escapeHtml(product.description)}
           </p>
         </div>
 
-        <div class="flex items-center justify-between gap-3 lg:block lg:text-right">
-          <p class="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+        <div class="col-span-2 flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-2.5 py-1.5 md:col-span-1 md:block md:bg-transparent md:px-0 md:py-0 md:text-right">
+          <p class="text-[0.62rem] font-black uppercase tracking-[0.14em] text-slate-400 md:text-xs md:tracking-[0.18em]">
             Precio
           </p>
 
-          <p class="text-lg font-black text-[#0F4C5C]">
+          <p class="text-sm font-black text-[#0F4C5C] md:text-lg">
             ${escapeHtml(product.priceText)}
           </p>
         </div>
 
-        <div class="flex items-center gap-2 lg:justify-end">
+        <div class="col-span-2 flex items-center gap-1.5 md:col-span-1 md:gap-2 md:justify-end">
           ${
             quantity > 0
               ? `
                 <button
                   type="button"
                   data-decrease-product="${escapeHtml(product.id)}"
-                  class="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 text-lg font-black text-slate-600 transition hover:bg-slate-100"
+                  class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 text-base font-black text-slate-600 transition hover:bg-slate-100 md:h-10 md:w-10 md:text-lg"
                   aria-label="Reducir cantidad"
                 >
                   -
                 </button>
 
-                <span class="flex h-10 min-w-10 items-center justify-center rounded-full bg-slate-100 px-3 text-sm font-black text-slate-950">
+                <span class="flex h-9 min-w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 px-2.5 text-xs font-black text-slate-950 md:h-10 md:min-w-10 md:px-3 md:text-sm">
                   ${quantity}
                 </span>
               `
@@ -460,7 +515,7 @@ function initCatalogPage() {
           <button
             type="button"
             data-add-product="${escapeHtml(product.id)}"
-            class="min-h-10 flex-1 rounded-full px-4 text-sm font-black transition lg:flex-none ${
+            class="min-h-9 flex-1 rounded-full px-3 text-xs font-black transition md:min-h-10 md:flex-none md:px-4 md:text-sm ${
               isUnavailable
                 ? "bg-slate-100 text-slate-500 hover:bg-slate-200"
                 : "bg-[#0F4C5C] text-white hover:bg-[#0B3D4A]"
@@ -643,6 +698,9 @@ function initCatalogPage() {
     if (cart.length === 0) {
       sendOrder.href =
         "https://wa.me/529631788473?text=Hola%20Fisherman%2C%20quiero%20hacer%20un%20pedido.";
+      if (mobileSendOrder) {
+        mobileSendOrder.href = sendOrder.href;
+      }
       return;
     }
 
@@ -669,6 +727,9 @@ function initCatalogPage() {
     ].join("\n");
 
     sendOrder.href = `https://wa.me/529631788473?text=${encodeURIComponent(message)}`;
+    if (mobileSendOrder) {
+      mobileSendOrder.href = sendOrder.href;
+    }
   }
 
   function renderCart() {
@@ -686,6 +747,16 @@ function initCatalogPage() {
         : cart.length > 0
           ? "Por confirmar"
           : "$0.00";
+    if (mobileCartSummary) {
+      mobileCartSummary.textContent =
+        totals.quantity === 1
+          ? "1 producto"
+          : `${totals.quantity} productos`;
+    }
+
+    if (mobileCartTotal) {
+      mobileCartTotal.textContent = cartTotal.textContent;
+    }
 
     cart.forEach((item) => {
       const row = document.createElement("div");

@@ -10,8 +10,8 @@ import Footer from "../components/Footer.astro";
 >
   <Navbar />
 
-  <main class="min-h-screen bg-slate-100 pt-24 text-slate-950">
-    <section class="relative overflow-hidden px-4 py-10">
+  <main class="min-h-screen bg-slate-100 pb-28 pt-24 text-slate-950 xl:pb-0">
+    <section class="relative overflow-hidden px-4 py-6 md:py-10">
       <div class="absolute inset-0 opacity-70">
         <div class="absolute left-[-12%] top-[4%] h-96 w-96 rounded-full bg-cyan-200/50 blur-3xl"></div>
         <div class="absolute bottom-[-18%] right-[-10%] h-96 w-96 rounded-full bg-[#0F4C5C]/20 blur-3xl"></div>
@@ -45,7 +45,7 @@ import Footer from "../components/Footer.astro";
         </div>
 
         <div class="mt-8 grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
-          <section class="rounded-3xl border border-slate-200 bg-white p-4 shadow-xl md:p-5">
+          <section class="rounded-3xl border border-slate-200 bg-white p-3 shadow-xl md:p-5">
             <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_15rem_13rem]">
               <label class="block">
                 <span class="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
@@ -96,30 +96,30 @@ import Footer from "../components/Footer.astro";
               </button>
             </div>
 
-            <div class="mt-5 grid gap-3 border-y border-slate-200 py-4 md:grid-cols-3">
-              <div class="rounded-2xl bg-slate-50 p-4">
-                <p class="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+            <div class="mt-5 grid grid-cols-3 gap-2 border-y border-slate-200 py-4 md:gap-3">
+              <div class="rounded-2xl bg-slate-50 p-3 md:p-4">
+                <p class="text-[0.65rem] font-black uppercase tracking-[0.14em] text-slate-400 md:text-xs md:tracking-[0.2em]">
                   Resultados
                 </p>
-                <p id="catalog-count" class="mt-1 text-2xl font-black text-slate-950">
+                <p id="catalog-count" class="mt-1 text-xl font-black text-slate-950 md:text-2xl">
                   0
                 </p>
               </div>
 
-              <div class="rounded-2xl bg-emerald-50 p-4">
-                <p class="text-xs font-black uppercase tracking-[0.2em] text-emerald-700">
+              <div class="rounded-2xl bg-emerald-50 p-3 md:p-4">
+                <p class="text-[0.65rem] font-black uppercase tracking-[0.14em] text-emerald-700 md:text-xs md:tracking-[0.2em]">
                   Disponible
                 </p>
-                <p class="mt-1 text-sm font-bold text-emerald-800">
+                <p class="mt-1 text-xs font-bold text-emerald-800 md:text-sm">
                   Listo para solicitar
                 </p>
               </div>
 
-              <div class="rounded-2xl bg-amber-50 p-4">
-                <p class="text-xs font-black uppercase tracking-[0.2em] text-amber-700">
+              <div class="rounded-2xl bg-amber-50 p-3 md:p-4">
+                <p class="text-[0.65rem] font-black uppercase tracking-[0.14em] text-amber-700 md:text-xs md:tracking-[0.2em]">
                   Pocas piezas
                 </p>
-                <p class="mt-1 text-sm font-bold text-amber-800">
+                <p class="mt-1 text-xs font-bold text-amber-800 md:text-sm">
                   Conviene confirmar pronto
                 </p>
               </div>
@@ -137,7 +137,7 @@ import Footer from "../components/Footer.astro";
 
             <div
               id="catalog-grid"
-              class="mt-5 grid gap-3"
+              class="mt-4 grid gap-2.5 md:mt-5 md:gap-3"
             >
             </div>
 
@@ -164,7 +164,7 @@ import Footer from "../components/Footer.astro";
             </div>
           </section>
 
-          <aside class="xl:sticky xl:top-28 xl:self-start">
+          <aside id="catalog-cart-panel" class="scroll-mt-24 xl:sticky xl:top-28 xl:self-start">
             <div class="rounded-3xl bg-[#05070A] p-5 text-white shadow-2xl">
               <p class="text-sm font-black uppercase tracking-[0.24em] text-cyan-300">
                 Tu solicitud
@@ -325,7 +325,7 @@ import Footer from "../components/Footer.astro";
 
     <div
       id="catalog-toast"
-      class="pointer-events-none fixed bottom-5 left-1/2 z-[90] hidden w-[min(92vw,28rem)] -translate-x-1/2 rounded-2xl border border-cyan-200/30 bg-slate-950/92 p-4 text-white shadow-2xl shadow-cyan-950/30 backdrop-blur-xl"
+      class="pointer-events-none fixed bottom-24 left-1/2 z-[90] hidden w-[min(92vw,28rem)] -translate-x-1/2 rounded-2xl border border-cyan-200/30 bg-slate-950/92 p-4 text-white shadow-2xl shadow-cyan-950/30 backdrop-blur-xl xl:bottom-5"
       aria-live="polite"
     >
       <p id="catalog-toast-title" class="text-sm font-black text-cyan-200">
@@ -335,6 +335,37 @@ import Footer from "../components/Footer.astro";
       <p id="catalog-toast-message" class="mt-1 text-sm leading-6 text-slate-300">
         Tu solicitud se actualizo.
       </p>
+    </div>
+
+    <div class="fixed inset-x-0 bottom-0 z-[70] border-t border-white/10 bg-slate-950/94 px-3 py-3 text-white shadow-2xl shadow-slate-950/40 backdrop-blur-xl xl:hidden">
+      <div class="mx-auto grid max-w-2xl grid-cols-[1fr_auto_auto] items-center gap-2">
+        <div class="min-w-0">
+          <p id="mobile-cart-summary" class="truncate text-sm font-black">
+            0 productos
+          </p>
+
+          <p id="mobile-cart-total" class="truncate text-xs font-bold text-cyan-200">
+            $0.00
+          </p>
+        </div>
+
+        <a
+          href="#catalog-cart-panel"
+          class="flex min-h-11 items-center justify-center rounded-full border border-white/10 px-4 text-sm font-black text-slate-200"
+        >
+          Ver
+        </a>
+
+        <a
+          id="mobile-send-order"
+          href="https://wa.me/529631788473?text=Hola%20Fisherman%2C%20quiero%20hacer%20un%20pedido."
+          target="_blank"
+          rel="noopener noreferrer"
+          class="flex min-h-11 items-center justify-center rounded-full bg-cyan-300 px-4 text-sm font-black text-slate-950"
+        >
+          Enviar
+        </a>
+      </div>
     </div>
   </main>
 

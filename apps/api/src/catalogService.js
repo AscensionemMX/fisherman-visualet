@@ -13,10 +13,13 @@ const catalogCache = {
   products: [],
   syncedAt: null,
   expiresAt: 0,
+  refreshPromise: null,
 };
 
 const DOLIBARR_PAGE_SIZE = 500;
 const DOLIBARR_MAX_PAGES = 10;
+const CATEGORY_LOAD_TIMEOUT_MS = 4500;
+const CATEGORY_LOAD_CONCURRENCY = 4;
 
 function buildCategoryPath(category, categoriesById) {
   const labels = [];
@@ -47,8 +50,11 @@ async function getProductCategoryMap(config) {
   );
   const productCategories = new Map();
 
-  await Promise.all(
-    categories.map(async (category) => {
+  for (let index = 0; index < categories.length; index += CATEGORY_LOAD_CONCURRENCY) {
+    const batch = categories.slice(index, index + CATEGORY_LOAD_CONCURRENCY);
+
+    await Promise.all(
+      batch.map(async (category) => {
       const categoryId = String(category.id);
       const categoryPath = buildCategoryPath(category, categoriesById);
       const categoryProducts = await listDolibarrCategoryProducts(config, categoryId, {
@@ -62,10 +68,86 @@ async function getProductCategoryMap(config) {
         currentCategories.push(categoryPath);
         productCategories.set(productId, currentCategories);
       }
-    }),
-  );
+      }),
+    );
+  }
 
   return productCategories;
+}
+
+function withTimeout(promise, timeoutMs, fallbackValue) {
+  let timeoutId;
+
+  const timeout = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve(fallbackValue), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
+
+async function refreshCatalog(config) {
+  const syncedAt = new Date().toISOString();
+  const dolibarrProducts = [];
+
+  for (let page = 0; page < DOLIBARR_MAX_PAGES; page += 1) {
+    const pageProducts = await listDolibarrProducts(config, {
+      page,
+      limit: DOLIBARR_PAGE_SIZE,
+    });
+
+    dolibarrProducts.push(...pageProducts);
+
+    if (pageProducts.length < DOLIBARR_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  const productCategoryMap = await withTimeout(
+    getProductCategoryMap(config).catch((error) => {
+      console.warn(
+        "Unable to load Dolibarr categories:",
+        error instanceof Error ? error.message : error,
+      );
+
+      return new Map();
+    }),
+    CATEGORY_LOAD_TIMEOUT_MS,
+    new Map(),
+  );
+
+  catalogCache.products = dolibarrProducts
+    .map((product) =>
+      normalizeDolibarrProduct(
+        product,
+        syncedAt,
+        productCategoryMap.get(String(product.id)) ?? [],
+      ),
+    )
+    .filter(isCatalogProduct)
+    .sort((a, b) => a.name.localeCompare(b.name, "es"));
+  catalogCache.syncedAt = syncedAt;
+  catalogCache.expiresAt = Date.now() + config.catalogCacheTtlMs;
+}
+
+function refreshCatalogInBackground(config) {
+  if (catalogCache.refreshPromise) {
+    return catalogCache.refreshPromise;
+  }
+
+  catalogCache.refreshPromise = refreshCatalog(config)
+    .catch((error) => {
+      console.warn(
+        "Unable to refresh catalog:",
+        error instanceof Error ? error.message : error,
+      );
+    })
+    .finally(() => {
+      catalogCache.refreshPromise = null;
+    });
+
+  return catalogCache.refreshPromise;
 }
 
 function shouldUseCache(now) {
@@ -78,43 +160,19 @@ export async function getCatalogProducts(config, options = {}) {
   let source = "dolibarr";
 
   if (!shouldUseCache(now)) {
-    try {
-      const syncedAt = new Date().toISOString();
-      const dolibarrProducts = [];
-
-      for (let page = 0; page < DOLIBARR_MAX_PAGES; page += 1) {
-        const pageProducts = await listDolibarrProducts(config, {
-          page,
-          limit: DOLIBARR_PAGE_SIZE,
-        });
-
-        dolibarrProducts.push(...pageProducts);
-
-        if (pageProducts.length < DOLIBARR_PAGE_SIZE) {
-          break;
-        }
-      }
-
-      const productCategoryMap = await getProductCategoryMap(config);
-
-      catalogCache.products = dolibarrProducts
-        .map((product) =>
-          normalizeDolibarrProduct(
-            product,
-            syncedAt,
-            productCategoryMap.get(String(product.id)) ?? [],
-          ),
-        )
-        .filter(isCatalogProduct)
-        .sort((a, b) => a.name.localeCompare(b.name, "es"));
-      catalogCache.syncedAt = syncedAt;
-      catalogCache.expiresAt = now + config.catalogCacheTtlMs;
-    } catch (error) {
-      if (catalogCache.products.length === 0) {
-        throw error;
-      }
-
+    if (catalogCache.products.length > 0) {
       source = "cache";
+      refreshCatalogInBackground(config);
+    } else {
+      try {
+        await refreshCatalog(config);
+      } catch (error) {
+        if (catalogCache.products.length === 0) {
+          throw error;
+        }
+
+        source = "cache";
+      }
     }
   } else {
     source = "cache";
