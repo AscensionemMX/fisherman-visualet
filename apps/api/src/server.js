@@ -37,6 +37,7 @@ async function handleRequest(request, response) {
         audience: url.searchParams.get("audience") ?? "customer",
         page: url.searchParams.get("page") ?? "0",
         limit: url.searchParams.get("limit") ?? "100",
+        search: url.searchParams.get("q") ?? "",
       });
 
       sendJson(response, 200, payload);

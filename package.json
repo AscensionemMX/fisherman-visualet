@@ -1,0 +1,12 @@
+{
+  "name": "fisherman-visualet",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "npm --prefix apps/api run dev",
+    "dev:website": "npm --prefix apps/website run dev",
+    "build": "npm --prefix apps/website run build",
+    "check:api": "npm --prefix apps/api run check"
+  }
+}

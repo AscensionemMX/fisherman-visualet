@@ -87,6 +87,32 @@ function withTimeout(promise, timeoutMs, fallbackValue) {
   });
 }
 
+function normalizeSearch(value = "") {
+  return String(value).trim().slice(0, 80);
+}
+
+function productMatchesSearch(product, search) {
+  if (!search) return true;
+
+  const normalizedSearch = search
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  const searchable = [
+    product.name,
+    product.sku,
+    product.description,
+    ...(product.categories ?? []),
+  ]
+    .join(" ")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  return searchable.includes(normalizedSearch);
+}
+
 async function refreshCatalog(config) {
   const syncedAt = new Date().toISOString();
   const dolibarrProducts = [];
@@ -131,20 +157,57 @@ async function refreshCatalog(config) {
   catalogCache.expiresAt = Date.now() + config.catalogCacheTtlMs;
 }
 
-async function getFastProductPage(config, page, limit) {
+async function getFastProductPage(config, page, limit, search = "") {
   const syncedAt = new Date().toISOString();
-  const dolibarrProducts = await listDolibarrProducts(config, {
+  const dolibarrProducts = [];
+
+  if (search) {
+    for (let searchPage = 0; searchPage < DOLIBARR_MAX_PAGES; searchPage += 1) {
+      const pageProducts = await listDolibarrProducts(config, {
+        page: searchPage,
+        limit: DOLIBARR_PAGE_SIZE,
+      });
+
+      dolibarrProducts.push(
+        ...pageProducts
+          .map((product) => normalizeDolibarrProduct(product, syncedAt, []))
+          .filter(isCatalogProduct)
+          .filter((product) => productMatchesSearch(product, search)),
+      );
+
+      if (dolibarrProducts.length >= (page + 1) * limit) {
+        break;
+      }
+
+      if (pageProducts.length < DOLIBARR_PAGE_SIZE) {
+        break;
+      }
+    }
+
+    const start = page * limit;
+    const pageMatches = dolibarrProducts.slice(start, start + limit);
+
+    return {
+      products: pageMatches.sort((a, b) => a.name.localeCompare(b.name, "es")),
+      syncedAt,
+      total: dolibarrProducts.length,
+      hasMore: start + limit < dolibarrProducts.length,
+    };
+  }
+
+  const pageProducts = await listDolibarrProducts(config, {
     page,
     limit,
   });
 
   return {
-    products: dolibarrProducts
+    products: pageProducts
       .map((product) => normalizeDolibarrProduct(product, syncedAt, []))
       .filter(isCatalogProduct)
       .sort((a, b) => a.name.localeCompare(b.name, "es")),
     syncedAt,
-    hasMore: dolibarrProducts.length >= limit,
+    total: null,
+    hasMore: pageProducts.length >= limit,
   };
 }
 
@@ -174,6 +237,7 @@ function shouldUseCache(now) {
 export async function getCatalogProducts(config, options = {}) {
   const now = Date.now();
   const audience = options.audience === "seller" ? "seller" : "customer";
+  const search = normalizeSearch(options.search);
   const page = Math.max(0, Number.parseInt(options.page ?? "0", 10) || 0);
   const limit = Math.min(
     500,
@@ -187,7 +251,7 @@ export async function getCatalogProducts(config, options = {}) {
       refreshCatalogInBackground(config);
     } else {
       try {
-        const fastPage = await getFastProductPage(config, page, limit);
+        const fastPage = await getFastProductPage(config, page, limit, search);
 
         refreshCatalogInBackground(config);
 
@@ -198,7 +262,7 @@ export async function getCatalogProducts(config, options = {}) {
           pagination: {
             page,
             limit,
-            total: null,
+            total: fastPage.total,
             hasMore: fastPage.hasMore,
           },
         };
@@ -217,7 +281,7 @@ export async function getCatalogProducts(config, options = {}) {
   const visibleProducts = catalogCache.products.filter((product) => {
     if (audience === "seller") return true;
     return product.visibility !== "hidden_customer" && product.visibility !== "seller_only";
-  });
+  }).filter((product) => productMatchesSearch(product, search));
   const start = page * limit;
   const paginatedProducts = visibleProducts.slice(start, start + limit);
 

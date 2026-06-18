@@ -35,7 +35,7 @@ type CachedCatalogResponse = ApiCatalogResponse & {
 };
 
 const fallbackProducts = catalogProducts;
-const MAX_RENDERED_PRODUCTS = 120;
+const MAX_RENDERED_PRODUCTS = 50;
 const CATALOG_PAGE_SIZE = 50;
 const PRODUCTION_VISUALET_API_URL = "https://navajowhite-sardine-989084.hostingersite.com";
 const CATALOG_STORAGE_KEY = "fisherman.catalog.products.v1";
@@ -53,6 +53,8 @@ function getVisualetApiUrl() {
 }
 
 const visualetApiUrl = getVisualetApiUrl();
+const fallbackVisualetApiUrl =
+  visualetApiUrl === "http://localhost:8787" ? PRODUCTION_VISUALET_API_URL : "";
 
 function getRequiredElement<T extends Element>(selector: string) {
   const element = document.querySelector<T>(selector);
@@ -177,6 +179,8 @@ function initCatalogPage() {
   let isLoadingCatalogProducts = false;
   let catalogTotal: number | undefined;
   let fastCatalogRetryCount = 0;
+  let searchDebounceTimeout: number | undefined;
+  let activeServerSearch = "";
 
   function formatPrice(value: number) {
     return new Intl.NumberFormat("es-MX", {
@@ -204,6 +208,28 @@ function initCatalogPage() {
 
   function updateCatalogSource(status: string) {
     catalogSource.textContent = status;
+  }
+
+  async function fetchCatalogPage(apiUrl: string, page: number, search: string) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 9000);
+    const params = new URLSearchParams({
+      audience: "customer",
+      page: String(page),
+      limit: String(CATALOG_PAGE_SIZE),
+    });
+
+    if (search) {
+      params.set("q", search);
+    }
+
+    try {
+      return await fetch(`${apiUrl}/catalog/products?${params.toString()}`, {
+        signal: controller.signal,
+      });
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   }
 
   function readStoredCatalog(): CachedCatalogResponse | null {
@@ -286,7 +312,7 @@ function initCatalogPage() {
         : "Ver mas productos";
   }
 
-  async function loadProductsFromApi(page = 0, append = false) {
+  async function loadProductsFromApi(page = 0, append = false, search = activeServerSearch) {
     if (isLoadingCatalogProducts) return;
 
     isLoadingCatalogProducts = true;
@@ -297,9 +323,18 @@ function initCatalogPage() {
         page === 0 ? "Sincronizando catalogo..." : "Cargando mas productos...",
       );
 
-      const response = await fetch(
-        `${visualetApiUrl}/catalog/products?audience=customer&page=${page}&limit=${CATALOG_PAGE_SIZE}`,
-      );
+      let response: Response;
+
+      try {
+        response = await fetchCatalogPage(visualetApiUrl, page, search);
+      } catch (error) {
+        if (!fallbackVisualetApiUrl) throw error;
+        response = await fetchCatalogPage(fallbackVisualetApiUrl, page, search);
+      }
+
+      if (!response.ok && fallbackVisualetApiUrl) {
+        response = await fetchCatalogPage(fallbackVisualetApiUrl, page, search);
+      }
 
       if (!response.ok) {
         throw new Error(`Visualet API responded with ${response.status}`);
@@ -319,7 +354,7 @@ function initCatalogPage() {
         updateCatalogSource("Datos Fisherman - cargando etiquetas y total...");
 
         window.setTimeout(() => {
-          void loadProductsFromApi(0, false);
+          void loadProductsFromApi(0, false, activeServerSearch);
         }, fastCatalogRetryCount === 1 ? 8000 : 18000);
       }
     } catch (error) {
@@ -498,7 +533,9 @@ function initCatalogPage() {
       selectedAvailability !== "todos";
 
     grid.innerHTML = "";
-    catalogCount.textContent = hasActiveFilter
+    catalogCount.textContent = activeServerSearch && catalogTotal
+      ? `${products.length} de ${catalogTotal}`
+      : hasActiveFilter
       ? filteredProducts.length > MAX_RENDERED_PRODUCTS
         ? `${MAX_RENDERED_PRODUCTS} de ${filteredProducts.length}`
         : String(filteredProducts.length)
@@ -916,7 +953,21 @@ function initCatalogPage() {
     renderRecommendations();
   }
 
-  searchInput.addEventListener("input", renderProducts);
+  searchInput.addEventListener("input", () => {
+    renderProducts();
+
+    if (searchDebounceTimeout) {
+      window.clearTimeout(searchDebounceTimeout);
+    }
+
+    searchDebounceTimeout = window.setTimeout(() => {
+      activeServerSearch = searchInput.value.trim();
+      nextCatalogPage = 0;
+      catalogTotal = undefined;
+      hasMoreCatalogProducts = false;
+      void loadProductsFromApi(0, false, activeServerSearch);
+    }, 420);
+  });
 
   categorySelect.addEventListener("change", (event) => {
     setCategory((event.target as HTMLSelectElement).value as CatalogCategory);
@@ -929,7 +980,7 @@ function initCatalogPage() {
   });
 
   loadMoreButton.addEventListener("click", () => {
-    void loadProductsFromApi(nextCatalogPage, true);
+    void loadProductsFromApi(nextCatalogPage, true, activeServerSearch);
   });
 
   document.addEventListener("click", (event) => {
