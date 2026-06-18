@@ -12,6 +12,7 @@ type ApiCatalogProduct = {
   name: string;
   description: string;
   priceShown: number;
+  priceIncludesTax?: boolean;
   availability: string;
   imageUrl?: string;
   categories?: string[];
@@ -213,6 +214,7 @@ function initCatalogPage() {
       description: product.description || product.name,
       priceText: formatPrice(product.priceShown),
       priceValue: product.priceShown,
+      priceIncludesTax: product.priceIncludesTax,
       availability: product.availability,
       imageUrl: resolveApiUrl(product.imageUrl),
       categories: product.categories ?? [],
@@ -669,6 +671,10 @@ function initCatalogPage() {
       const availabilityKey = getAvailabilityKey(availability);
       const isUnavailable = availabilityKey === "no-disponible";
       const categoryBadges = (product.categories ?? []).slice(0, 3);
+      const taxLabel = product.priceIncludesTax ? "IVA incluido" : "Sin IVA";
+      const taxLabelClasses = product.priceIncludesTax
+        ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+        : "bg-slate-100 text-slate-600 border-slate-200";
       const article = document.createElement("article");
 
       article.className =
@@ -731,6 +737,10 @@ function initCatalogPage() {
 
           <p class="text-sm font-black text-[#0F4C5C] md:text-lg">
             ${escapeHtml(product.priceText)}
+          </p>
+
+          <p class="mt-1 inline-flex rounded-full border px-2 py-0.5 text-[0.6rem] font-black uppercase tracking-[0.1em] md:text-[0.65rem] ${taxLabelClasses}">
+            ${escapeHtml(taxLabel)}
           </p>
         </div>
 

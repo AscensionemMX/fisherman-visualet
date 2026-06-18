@@ -15,6 +15,7 @@ export type CatalogProduct = {
   description: string;
   priceText: string;
   priceValue?: number;
+  priceIncludesTax?: boolean;
   availability?: string;
   imageUrl?: string;
   categories?: string[];
