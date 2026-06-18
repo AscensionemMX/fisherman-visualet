@@ -150,6 +150,13 @@ description:
 priceBase:
   convertir string decimal a number
 
+priceShown:
+  mostrar precio final al cliente
+  usar price_ttc cuando Dolibarr lo entregue
+  si price_ttc no existe y price_base_type == "HT" con tva_tx > 0,
+  calcular price * (1 + tva_tx / 100)
+  si no hay datos fiscales suficientes, no inventar IVA y usar price
+
 stockReal:
   convertir string a number
 

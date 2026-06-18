@@ -11,6 +11,50 @@ function toBooleanFromFlag(value) {
   return String(value) === "1";
 }
 
+function roundMoney(value) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function resolveProductPrices(product) {
+  const priceBase = toNumber(product.price);
+  const rawPriceWithTax = toNumber(product.price_ttc, 0);
+  const taxRate = toNumber(product.tva_tx, 0);
+  const priceBaseType = String(product.price_base_type ?? "").toUpperCase();
+
+  if (rawPriceWithTax > 0) {
+    return {
+      priceBase: roundMoney(priceBase),
+      priceWithTax: roundMoney(rawPriceWithTax),
+      priceShown: roundMoney(rawPriceWithTax),
+      priceIncludesTax: true,
+      priceBaseType,
+      taxRate,
+    };
+  }
+
+  if (priceBaseType === "HT" && taxRate > 0) {
+    const computedPriceWithTax = priceBase * (1 + taxRate / 100);
+
+    return {
+      priceBase: roundMoney(priceBase),
+      priceWithTax: roundMoney(computedPriceWithTax),
+      priceShown: roundMoney(computedPriceWithTax),
+      priceIncludesTax: true,
+      priceBaseType,
+      taxRate,
+    };
+  }
+
+  return {
+    priceBase: roundMoney(priceBase),
+    priceWithTax: roundMoney(priceBase),
+    priceShown: roundMoney(priceBase),
+    priceIncludesTax: priceBaseType === "TTC",
+    priceBaseType,
+    taxRate,
+  };
+}
+
 function normalizeKey(value) {
   return String(value)
     .trim()
@@ -81,15 +125,14 @@ export function normalizeDolibarrProduct(product, syncedAt, assignedCategories =
   const categories = [...new Set([...getCategories(product), ...assignedCategories])];
   const name = product.label || product.ref || `Producto ${product.id}`;
   const description = product.description || name;
+  const prices = resolveProductPrices(product);
 
   return {
     dolibarrProductId: String(product.id),
     sku: String(product.ref ?? ""),
     name: String(name),
     description: String(description),
-    priceBase: toNumber(product.price),
-    priceWithTax: toNumber(product.price_ttc, toNumber(product.price)),
-    priceShown: toNumber(product.price),
+    ...prices,
     stockReal,
     customerAvailability: getCustomerAvailability(stockReal),
     sellerAvailability: `${stockReal} piezas`,
@@ -115,6 +158,7 @@ export function toAudienceProduct(product, audience) {
     name: product.name,
     description: product.description,
     priceShown: product.priceShown,
+    priceIncludesTax: product.priceIncludesTax,
     categories: product.categories,
     availability:
       audience === "seller"
