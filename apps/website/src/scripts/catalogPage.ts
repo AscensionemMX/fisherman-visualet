@@ -173,6 +173,10 @@ function initCatalogPage() {
   const closeImageModalButton = getRequiredElement<HTMLButtonElement>("#product-image-close");
   const zoomInButton = getRequiredElement<HTMLButtonElement>("#product-image-zoom-in");
   const zoomOutButton = getRequiredElement<HTMLButtonElement>("#product-image-zoom-out");
+  const bootScreen = getOptionalElement<HTMLDivElement>("#catalog-boot-screen");
+  const bootStatus = getOptionalElement<HTMLParagraphElement>("#catalog-boot-status");
+  const bootWaitButton = getOptionalElement<HTMLButtonElement>("#catalog-boot-wait");
+  const bootSkipButton = getOptionalElement<HTMLButtonElement>("#catalog-boot-skip");
 
   let selectedCategory: CatalogCategory = "todos";
   let selectedAvailability: CatalogAvailabilityFilter = "todos";
@@ -189,6 +193,8 @@ function initCatalogPage() {
   let activeServerSearch = "";
   let globalFilterCategories: string[] = [];
   let filterRetryTimeout: number | undefined;
+  let bootScreenTimer: number | undefined;
+  let bootScreenDismissed = false;
 
   function formatPrice(value: number) {
     return new Intl.NumberFormat("es-MX", {
@@ -216,6 +222,43 @@ function initCatalogPage() {
 
   function updateCatalogSource(status: string) {
     catalogSource.textContent = status;
+  }
+
+  function updateBootStatus(status: string) {
+    if (bootStatus) {
+      bootStatus.textContent = status;
+    }
+  }
+
+  function showBootScreen() {
+    if (!bootScreen || bootScreenDismissed) return;
+
+    bootScreen.classList.remove("hidden");
+    bootScreen.setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+  }
+
+  function hideBootScreen() {
+    if (bootScreenTimer) {
+      window.clearTimeout(bootScreenTimer);
+      bootScreenTimer = undefined;
+    }
+
+    if (!bootScreen) return;
+
+    bootScreenDismissed = true;
+    bootScreen.classList.add("hidden");
+    bootScreen.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+  }
+
+  function scheduleBootScreen() {
+    if (bootScreenTimer || bootScreenDismissed || readStoredCatalog()) return;
+
+    bootScreenTimer = window.setTimeout(() => {
+      bootScreenTimer = undefined;
+      showBootScreen();
+    }, 700);
   }
 
   async function fetchCatalogPage(apiUrl: string, page: number, search: string) {
@@ -344,22 +387,28 @@ function initCatalogPage() {
 
     isLoadingCatalogProducts = true;
     updateLoadMoreButton();
+    if (page === 0 && !append) {
+      scheduleBootScreen();
+    }
 
     try {
       updateCatalogSource(
         page === 0 ? "Sincronizando catalogo..." : "Cargando mas productos...",
       );
+      updateBootStatus("Conectando con Dolibarr...");
 
       let response: Response;
 
       try {
         response = await fetchCatalogPage(visualetApiUrl, page, search);
       } catch (error) {
+        updateBootStatus("Usando ruta de respaldo Fisherman...");
         if (!fallbackVisualetApiUrl) throw error;
         response = await fetchCatalogPage(fallbackVisualetApiUrl, page, search);
       }
 
       if (!response.ok && fallbackVisualetApiUrl) {
+        updateBootStatus("Reintentando conexion del catalogo...");
         response = await fetchCatalogPage(fallbackVisualetApiUrl, page, search);
       }
 
@@ -375,10 +424,12 @@ function initCatalogPage() {
 
       storeCatalog(data);
       useCatalogData(data, `Datos Fisherman (${data.source ?? "api"})`, append);
+      hideBootScreen();
 
       if (data.source === "dolibarr-fast" && fastCatalogRetryCount < 2 && !append) {
         fastCatalogRetryCount += 1;
         updateCatalogSource("Datos Fisherman - cargando etiquetas y total...");
+        updateBootStatus("Cargando etiquetas y total de productos...");
 
         window.setTimeout(() => {
           void loadProductsFromApi(0, false, activeServerSearch);
@@ -402,14 +453,17 @@ function initCatalogPage() {
           },
           "Datos Fisherman guardados",
         );
+        hideBootScreen();
         return;
       }
 
       products = fallbackProducts;
       renderCategoryFilters();
       updateCatalogSource("Catalogo local de respaldo");
+      updateBootStatus("Entrando con catalogo de respaldo...");
       hasMoreCatalogProducts = false;
       renderProducts();
+      hideBootScreen();
     } finally {
       isLoadingCatalogProducts = false;
       updateLoadMoreButton();
@@ -1080,6 +1134,15 @@ function initCatalogPage() {
     cart = [];
     renderProducts();
     renderCart();
+  });
+
+  bootWaitButton?.addEventListener("click", () => {
+    updateBootStatus("Seguimos sincronizando el catalogo...");
+  });
+
+  bootSkipButton?.addEventListener("click", () => {
+    updateCatalogSource("Puedes explorar mientras Fisherman sincroniza datos.");
+    hideBootScreen();
   });
 
   closeImageModalButton.addEventListener("click", closeImageModal);
