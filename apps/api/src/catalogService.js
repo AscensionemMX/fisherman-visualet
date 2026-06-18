@@ -14,6 +14,7 @@ const catalogCache = {
   syncedAt: null,
   expiresAt: 0,
   refreshPromise: null,
+  filters: [],
 };
 
 const DOLIBARR_PAGE_SIZE = 500;
@@ -113,6 +114,32 @@ function productMatchesSearch(product, search) {
   return searchable.includes(normalizedSearch);
 }
 
+function normalizeFilterCategory(category) {
+  const normalized = String(category)
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (!normalized) return null;
+  if (category.includes(">")) return null;
+  if (normalized.includes("componente activo")) return null;
+  if (normalized.includes("sustancia activa")) return null;
+  if (normalized.includes("sal activa")) return null;
+
+  return String(category).trim();
+}
+
+function getFilterCategoriesFromProducts(products) {
+  return Array.from(
+    new Set(
+      products.flatMap((product) => product.categories ?? [])
+        .map(normalizeFilterCategory)
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b, "es"));
+}
+
 async function refreshCatalog(config) {
   const syncedAt = new Date().toISOString();
   const dolibarrProducts = [];
@@ -153,6 +180,7 @@ async function refreshCatalog(config) {
     )
     .filter(isCatalogProduct)
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
+  catalogCache.filters = getFilterCategoriesFromProducts(catalogCache.products);
   catalogCache.syncedAt = syncedAt;
   catalogCache.expiresAt = Date.now() + config.catalogCacheTtlMs;
 }
@@ -295,5 +323,22 @@ export async function getCatalogProducts(config, options = {}) {
       total: visibleProducts.length,
       hasMore: start + limit < visibleProducts.length,
     },
+  };
+}
+
+export async function getCatalogFilters(config) {
+  const needsRefresh =
+    catalogCache.products.length === 0 ||
+    Date.now() >= catalogCache.expiresAt ||
+    catalogCache.filters.length === 0;
+
+  if (needsRefresh && !catalogCache.refreshPromise) {
+    refreshCatalogInBackground(config);
+  }
+
+  return {
+    items: catalogCache.filters,
+    lastSyncedAt: catalogCache.syncedAt,
+    warming: Boolean(catalogCache.refreshPromise),
   };
 }

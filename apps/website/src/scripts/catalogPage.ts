@@ -34,6 +34,12 @@ type CachedCatalogResponse = ApiCatalogResponse & {
   cachedAt?: string;
 };
 
+type ApiCatalogFiltersResponse = {
+  items: string[];
+  lastSyncedAt?: string;
+  warming?: boolean;
+};
+
 const fallbackProducts = catalogProducts;
 const MAX_RENDERED_PRODUCTS = 50;
 const CATALOG_PAGE_SIZE = 50;
@@ -181,6 +187,8 @@ function initCatalogPage() {
   let fastCatalogRetryCount = 0;
   let searchDebounceTimeout: number | undefined;
   let activeServerSearch = "";
+  let globalFilterCategories: string[] = [];
+  let filterRetryTimeout: number | undefined;
 
   function formatPrice(value: number) {
     return new Intl.NumberFormat("es-MX", {
@@ -227,6 +235,25 @@ function initCatalogPage() {
       return await fetch(`${apiUrl}/catalog/products?${params.toString()}`, {
         signal: controller.signal,
       });
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  async function fetchCatalogFilters(apiUrl: string) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+
+    try {
+      const response = await fetch(`${apiUrl}/catalog/filters`, {
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Visualet filters responded with ${response.status}`);
+      }
+
+      return (await response.json()) as ApiCatalogFiltersResponse;
     } finally {
       window.clearTimeout(timeoutId);
     }
@@ -390,11 +417,39 @@ function initCatalogPage() {
   }
 
   function getFilterCategories() {
-    return Array.from(
+    const productCategories = Array.from(
       new Set(
         products.flatMap((product) => product.categories ?? []).filter(isFilterCategory),
       ),
-    ).sort((a, b) => a.localeCompare(b, "es"));
+    );
+
+    return Array.from(new Set([...globalFilterCategories, ...productCategories]))
+      .sort((a, b) => a.localeCompare(b, "es"));
+  }
+
+  async function loadCatalogFilters() {
+    try {
+      let data: ApiCatalogFiltersResponse;
+
+      try {
+        data = await fetchCatalogFilters(visualetApiUrl);
+      } catch (error) {
+        if (!fallbackVisualetApiUrl) throw error;
+        data = await fetchCatalogFilters(fallbackVisualetApiUrl);
+      }
+
+      globalFilterCategories = data.items.filter(isFilterCategory);
+      renderCategoryFilters();
+
+      if (data.warming && globalFilterCategories.length === 0 && !filterRetryTimeout) {
+        filterRetryTimeout = window.setTimeout(() => {
+          filterRetryTimeout = undefined;
+          void loadCatalogFilters();
+        }, 3500);
+      }
+    } catch (error) {
+      console.warn("Unable to load catalog filters:", error);
+    }
   }
 
   function renderCategoryFilters() {
@@ -466,13 +521,23 @@ function initCatalogPage() {
     });
   }
 
-  function setCategory(category: CatalogCategory) {
+  function setCategory(category: CatalogCategory, options: { fetchProducts?: boolean } = {}) {
+    const shouldFetchProducts = options.fetchProducts ?? true;
+
     selectedCategory = category;
     categorySelect.value = category;
 
     updateCategoryButtonStyles();
 
     renderProducts();
+
+    if (!shouldFetchProducts) return;
+
+    activeServerSearch = category === "todos" ? searchInput.value.trim() : String(category);
+    nextCatalogPage = 0;
+    catalogTotal = undefined;
+    hasMoreCatalogProducts = false;
+    void loadProductsFromApi(0, false, activeServerSearch);
   }
 
   function updateCategoryButtonStyles() {
@@ -1034,8 +1099,9 @@ function initCatalogPage() {
   });
 
   renderCategoryFilters();
-  setCategory("todos");
+  setCategory("todos", { fetchProducts: false });
   renderCart();
+  void loadCatalogFilters();
   void loadProductsFromApi(0, false);
 }
 

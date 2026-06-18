@@ -1,7 +1,7 @@
 import http from "node:http";
 import { getProductImage } from "./catalogImageService.js";
 import { getConfig } from "./config.js";
-import { getCatalogProducts } from "./catalogService.js";
+import { getCatalogFilters, getCatalogProducts } from "./catalogService.js";
 import { loadLocalEnv } from "./env.js";
 import { sendBinary, sendJson, sendOptions, sendSvg } from "./http.js";
 
@@ -44,6 +44,20 @@ async function handleRequest(request, response) {
     } catch (error) {
       sendJson(response, 502, {
         error: "Unable to load catalog products",
+        detail: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/catalog/filters") {
+    try {
+      const payload = await getCatalogFilters(config);
+
+      sendJson(response, 200, payload);
+    } catch (error) {
+      sendJson(response, 502, {
+        error: "Unable to load catalog filters",
         detail: error instanceof Error ? error.message : "Unknown error",
       });
     }
