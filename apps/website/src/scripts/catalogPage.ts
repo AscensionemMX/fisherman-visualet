@@ -20,12 +20,12 @@ type ApiCatalogProduct = {
 
 type ApiCatalogResponse = {
   items: ApiCatalogProduct[];
-  source?: "dolibarr" | "cache";
+  source?: "dolibarr" | "dolibarr-fast" | "cache";
   lastSyncedAt?: string;
   pagination?: {
     page: number;
     limit: number;
-    total?: number;
+    total?: number | null;
     hasMore: boolean;
   };
 };
@@ -36,7 +36,7 @@ type CachedCatalogResponse = ApiCatalogResponse & {
 
 const fallbackProducts = catalogProducts;
 const MAX_RENDERED_PRODUCTS = 120;
-const CATALOG_PAGE_SIZE = 80;
+const CATALOG_PAGE_SIZE = 50;
 const PRODUCTION_VISUALET_API_URL = "https://navajowhite-sardine-989084.hostingersite.com";
 const CATALOG_STORAGE_KEY = "fisherman.catalog.products.v1";
 
@@ -176,6 +176,7 @@ function initCatalogPage() {
   let hasMoreCatalogProducts = false;
   let isLoadingCatalogProducts = false;
   let catalogTotal: number | undefined;
+  let fastCatalogRetryCount = 0;
 
   function formatPrice(value: number) {
     return new Intl.NumberFormat("es-MX", {
@@ -312,6 +313,15 @@ function initCatalogPage() {
 
       storeCatalog(data);
       useCatalogData(data, `Datos Fisherman (${data.source ?? "api"})`, append);
+
+      if (data.source === "dolibarr-fast" && fastCatalogRetryCount < 2 && !append) {
+        fastCatalogRetryCount += 1;
+        updateCatalogSource("Datos Fisherman - cargando etiquetas y total...");
+
+        window.setTimeout(() => {
+          void loadProductsFromApi(0, false);
+        }, fastCatalogRetryCount === 1 ? 8000 : 18000);
+      }
     } catch (error) {
       console.warn("Using local catalog fallback:", error);
 
@@ -482,12 +492,19 @@ function initCatalogPage() {
   function renderProducts() {
     const filteredProducts = getFilteredProducts();
     const renderedProducts = filteredProducts.slice(0, MAX_RENDERED_PRODUCTS);
+    const hasActiveFilter =
+      Boolean(searchInput.value.trim()) ||
+      selectedCategory !== "todos" ||
+      selectedAvailability !== "todos";
 
     grid.innerHTML = "";
-    catalogCount.textContent =
-      filteredProducts.length > MAX_RENDERED_PRODUCTS
+    catalogCount.textContent = hasActiveFilter
+      ? filteredProducts.length > MAX_RENDERED_PRODUCTS
         ? `${MAX_RENDERED_PRODUCTS} de ${filteredProducts.length}`
-        : String(filteredProducts.length);
+        : String(filteredProducts.length)
+      : catalogTotal
+        ? `${products.length} de ${catalogTotal}`
+        : `${products.length} cargados`;
     emptyState.classList.toggle("hidden", filteredProducts.length > 0);
 
     renderedProducts.forEach((product) => {

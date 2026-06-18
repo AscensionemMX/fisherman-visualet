@@ -18,7 +18,7 @@ const catalogCache = {
 
 const DOLIBARR_PAGE_SIZE = 500;
 const DOLIBARR_MAX_PAGES = 10;
-const CATEGORY_LOAD_TIMEOUT_MS = 4500;
+const CATEGORY_LOAD_TIMEOUT_MS = 20000;
 const CATEGORY_LOAD_CONCURRENCY = 4;
 
 function buildCategoryPath(category, categoriesById) {
@@ -131,6 +131,23 @@ async function refreshCatalog(config) {
   catalogCache.expiresAt = Date.now() + config.catalogCacheTtlMs;
 }
 
+async function getFastProductPage(config, page, limit) {
+  const syncedAt = new Date().toISOString();
+  const dolibarrProducts = await listDolibarrProducts(config, {
+    page,
+    limit,
+  });
+
+  return {
+    products: dolibarrProducts
+      .map((product) => normalizeDolibarrProduct(product, syncedAt, []))
+      .filter(isCatalogProduct)
+      .sort((a, b) => a.name.localeCompare(b.name, "es")),
+    syncedAt,
+    hasMore: dolibarrProducts.length >= limit,
+  };
+}
+
 function refreshCatalogInBackground(config) {
   if (catalogCache.refreshPromise) {
     return catalogCache.refreshPromise;
@@ -170,7 +187,21 @@ export async function getCatalogProducts(config, options = {}) {
       refreshCatalogInBackground(config);
     } else {
       try {
-        await refreshCatalog(config);
+        const fastPage = await getFastProductPage(config, page, limit);
+
+        refreshCatalogInBackground(config);
+
+        return {
+          items: fastPage.products.map((product) => toAudienceProduct(product, audience)),
+          source: "dolibarr-fast",
+          lastSyncedAt: fastPage.syncedAt,
+          pagination: {
+            page,
+            limit,
+            total: null,
+            hasMore: fastPage.hasMore,
+          },
+        };
       } catch (error) {
         if (catalogCache.products.length === 0) {
           throw error;
