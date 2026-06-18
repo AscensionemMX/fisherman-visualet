@@ -26,6 +26,7 @@ type ApiCatalogResponse = {
 
 const fallbackProducts = catalogProducts;
 const MAX_RENDERED_PRODUCTS = 120;
+const PRODUCTION_VISUALET_API_URL = "https://navajowhite-sardine-989084.hostingersite.com";
 
 function getVisualetApiUrl() {
   if (import.meta.env.PUBLIC_VISUALET_API_URL) {
@@ -36,7 +37,7 @@ function getVisualetApiUrl() {
     return "http://localhost:8787";
   }
 
-  return window.location.origin;
+  return PRODUCTION_VISUALET_API_URL;
 }
 
 const visualetApiUrl = getVisualetApiUrl();
