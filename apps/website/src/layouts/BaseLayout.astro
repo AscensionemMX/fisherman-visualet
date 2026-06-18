@@ -1,0 +1,205 @@
+---
+import "../styles/global.css";
+
+
+const {
+  title = "Fisherman Distribución",
+  description = "Distribución farmacéutica con tecnología, cercanía y confianza.",
+} = Astro.props;
+
+const siteUrl = "https://fishermandistribucion.com.mx";
+const ogImage = "/fisherman-logo-original.png";
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#05070A" />
+
+    <meta name="robots" content="index, follow" />
+
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={siteUrl} />
+    <meta property="og:image" content={`${siteUrl}${ogImage}`} />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={`${siteUrl}${ogImage}`} />
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <title>{title}</title>
+  </head>
+
+  <body>
+    <slot />
+
+    <script>
+      import "../scripts/fishermanAnimations";
+      import "../scripts/fishermanHeroCanvas";
+      
+    </script>
+<script is:inline>
+  (() => {
+    if (window.__fishermanSoundReady) return;
+    window.__fishermanSoundReady = true;
+
+    let audioContext = null;
+    let lastSoundAt = 0;
+
+    function getAudioContext() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+      if (!AudioContextClass) {
+        return null;
+      }
+
+      if (!audioContext) {
+        audioContext = new AudioContextClass();
+      }
+
+      return audioContext;
+    }
+
+    async function playFishermanClick() {
+      const nowMs = Date.now();
+
+      if (nowMs - lastSoundAt < 180) return;
+      lastSoundAt = nowMs;
+
+      const ctx = getAudioContext();
+
+      if (!ctx) return;
+
+      if (ctx.state === "suspended") {
+        await ctx.resume();
+      }
+
+      const now = ctx.currentTime;
+
+      const masterGain = ctx.createGain();
+      const filter = ctx.createBiquadFilter();
+
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(1800, now);
+      filter.frequency.exponentialRampToValueAtTime(950, now + 0.12);
+
+      masterGain.gain.setValueAtTime(0.0001, now);
+      masterGain.gain.exponentialRampToValueAtTime(0.055, now + 0.018);
+      masterGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+
+      filter.connect(masterGain);
+      masterGain.connect(ctx.destination);
+
+      const toneOne = ctx.createOscillator();
+      const toneOneGain = ctx.createGain();
+
+      toneOne.type = "sine";
+      toneOne.frequency.setValueAtTime(720, now);
+      toneOne.frequency.exponentialRampToValueAtTime(540, now + 0.11);
+
+      toneOneGain.gain.setValueAtTime(0.7, now);
+      toneOneGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+
+      toneOne.connect(toneOneGain);
+      toneOneGain.connect(filter);
+
+      const toneTwo = ctx.createOscillator();
+      const toneTwoGain = ctx.createGain();
+
+      toneTwo.type = "triangle";
+      toneTwo.frequency.setValueAtTime(1080, now);
+      toneTwo.frequency.exponentialRampToValueAtTime(860, now + 0.09);
+
+      toneTwoGain.gain.setValueAtTime(0.18, now);
+      toneTwoGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+
+      toneTwo.connect(toneTwoGain);
+      toneTwoGain.connect(filter);
+
+      toneOne.start(now);
+      toneTwo.start(now + 0.012);
+
+      toneOne.stop(now + 0.17);
+      toneTwo.stop(now + 0.13);
+
+      if ("vibrate" in navigator) {
+        navigator.vibrate(6);
+      }
+    }
+
+    function getSoundTarget(event) {
+      const target = event.target;
+
+      if (!(target instanceof Element)) return null;
+
+      return target.closest(
+        [
+          "[data-fisherman-click]",
+          ".fisherman-button-primary",
+          ".fisherman-button-secondary",
+          ".fisherman-epic-cta-button",
+          ".fisherman-epic-info-card",
+          "button",
+          "a[href]",
+          '[role="button"]'
+        ].join(",")
+      );
+    }
+
+    function handlePress(event) {
+      const target = getSoundTarget(event);
+
+      if (!target) return;
+
+      target.classList.add("fisherman-pressed");
+
+      window.setTimeout(() => {
+        target.classList.remove("fisherman-pressed");
+      }, 140);
+
+      playFishermanClick().catch(() => {});
+    }
+
+    document.addEventListener("pointerdown", handlePress, {
+      passive: true,
+      capture: true
+    });
+
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.repeat) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+
+        const target = getSoundTarget(event);
+
+        if (!target) return;
+
+        handlePress(event);
+      },
+      {
+        capture: true
+      }
+    );
+
+    window.testFishermanSound = playFishermanClick;
+  })();
+</script>
+  </body>
+</html>

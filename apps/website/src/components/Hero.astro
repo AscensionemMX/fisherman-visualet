@@ -1,0 +1,140 @@
+<section class="relative flex min-h-screen items-center overflow-hidden bg-[#05070A] px-4 pt-28">
+  <canvas
+    class="absolute inset-0 z-[1] h-full w-full"
+    data-hero-canvas
+    aria-hidden="true"
+  ></canvas>
+
+  <div class="absolute inset-0 z-[2] bg-[linear-gradient(to_bottom,rgba(5,7,10,0.16),rgba(5,7,10,0.48),rgba(5,7,10,0.96))]"></div>
+  <div class="absolute inset-0 z-[3] bg-[radial-gradient(circle_at_center,transparent_0%,rgba(5,7,10,0.2)_48%,rgba(5,7,10,0.78)_100%)]"></div>
+
+  <div class="fisherman-container relative z-10 grid items-center gap-12 py-20 lg:grid-cols-[1.03fr_0.97fr]">
+    <div>
+      <p data-hero-reveal class="fisherman-label">
+        Fisherman Distribucion
+      </p>
+
+      <h1
+        data-hero-reveal
+        class="fisherman-heading mt-6 max-w-4xl text-5xl font-bold leading-[0.95] text-white md:text-7xl"
+      >
+        Encuentra productos para tu negocio sin perder tiempo.
+      </h1>
+
+      <p
+        data-hero-reveal
+        class="mt-7 max-w-2xl text-lg leading-8 text-slate-300"
+      >
+        Revisa el catalogo Fisherman, busca lo que necesitas y pide ayuda si no
+        sabes por donde empezar. Te guiamos para comprar con mas claridad.
+      </p>
+
+      <div data-hero-reveal class="mt-10 flex flex-col gap-4 sm:flex-row">
+        <a href="/catalog" class="fisherman-button-primary">
+          Ver catalogo
+        </a>
+
+        <a
+          href="https://wa.me/529631788473?text=Hola%20Fisherman%2C%20quiero%20ayuda%20para%20encontrar%20productos."
+          target="_blank"
+          rel="noopener noreferrer"
+          class="fisherman-button-secondary"
+        >
+          Pedir ayuda
+        </a>
+      </div>
+
+      <div
+        data-hero-reveal
+        class="mt-12 flex flex-wrap gap-3 text-sm font-bold text-slate-300"
+      >
+        <span class="rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 backdrop-blur-xl">
+          Medicamentos
+        </span>
+
+        <span class="rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 backdrop-blur-xl">
+          Belleza y cuidado
+        </span>
+
+        <span class="rounded-full border border-white/10 bg-white/[0.06] px-4 py-2 backdrop-blur-xl">
+          Vitaminas y bienestar
+        </span>
+      </div>
+    </div>
+
+    <div data-hero-reveal class="relative">
+      <div data-hero-float class="fisherman-glass rounded-[2rem] p-5">
+        <div class="rounded-[1.5rem] bg-white p-5 text-slate-950">
+          <div class="flex items-center justify-between gap-4 border-b border-slate-200 pb-4">
+            <div>
+              <p class="text-xs font-bold uppercase tracking-[0.22em] text-slate-500">
+                Catalogo Fisherman
+              </p>
+
+              <h2 class="mt-1 text-2xl font-black">
+                Que necesitas surtir?
+              </h2>
+            </div>
+
+            <div class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
+              Disponible
+            </div>
+          </div>
+
+          <div class="mt-5 grid gap-4">
+            <a
+              href="/catalog"
+              class="rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:-translate-y-1 hover:bg-white hover:shadow-md"
+            >
+              <p class="text-sm font-black uppercase tracking-[0.2em] text-[#0F4C5C]">
+                Paso 1
+              </p>
+
+              <p class="mt-2 font-black">
+                Ver productos
+              </p>
+
+              <p class="mt-1 text-sm text-slate-500">
+                Busca por nombre y revisa disponibilidad.
+              </p>
+            </a>
+
+            <a
+              href="https://wa.me/529631788473?text=Hola%20Fisherman%2C%20tengo%20dudas%20sobre%20un%20producto."
+              target="_blank"
+              rel="noopener noreferrer"
+              class="rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:-translate-y-1 hover:bg-white hover:shadow-md"
+            >
+              <p class="text-sm font-black uppercase tracking-[0.2em] text-[#0F4C5C]">
+                Paso 2
+              </p>
+
+              <p class="mt-2 font-black">
+                Resolver dudas
+              </p>
+
+              <p class="mt-1 text-sm text-slate-500">
+                Si no sabes que pedir, Fisherman te ayuda.
+              </p>
+            </a>
+
+            <div class="fisherman-scan-line rounded-2xl bg-slate-950 p-4 text-white">
+              <p class="text-sm font-bold text-cyan-300">
+                Compra guiada
+              </p>
+
+              <p class="mt-1 text-sm text-slate-300">
+                El catalogo es el punto de entrada. La atencion comercial te
+                acompana cuando la compra necesita seguimiento.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="absolute -bottom-6 -left-6 hidden rounded-3xl border border-cyan-300/20 bg-cyan-300/10 p-5 text-sm text-cyan-100 shadow-2xl backdrop-blur-xl md:block">
+        Primero encuentras. Despues compras con apoyo.
+      </div>
+    </div>
+  </div>
+</section>
