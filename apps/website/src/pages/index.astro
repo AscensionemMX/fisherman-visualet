@@ -1,24 +1,30 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
+import IntroAnimation from "../components/IntroAnimation.astro";
+import ScrollStoryBackground from "../components/ScrollStoryBackground.astro";
 import Navbar from "../components/Navbar.astro";
 import Hero from "../components/Hero.astro";
 import CorePromiseSection from "../components/CorePromiseSection.astro";
 import StorySection from "../components/StorySection.astro";
+import HowWeWorkSection from "../components/HowWeWorkSection.astro";
 import PrivateCatalogSection from "../components/PrivateCatalogSection.astro";
 import AccessSection from "../components/AccessSection.astro";
 import Footer from "../components/Footer.astro";
 ---
 
 <BaseLayout
-  title="Fisherman Distribucion | Catalogo y atencion comercial"
-  description="Distribucion farmaceutica con catalogo de productos, compra guiada y atencion comercial directa."
+  title="Fisherman Distribución | Catálogo y atención comercial"
+  description="Distribución farmacéutica con catálogo de productos, compra guiada y atención comercial directa."
 >
+  <IntroAnimation />
+  <ScrollStoryBackground />
   <Navbar />
 
-  <main>
+  <main class="fisherman-story-page">
     <Hero />
     <CorePromiseSection />
     <StorySection />
+    <HowWeWorkSection />
     <PrivateCatalogSection />
     <AccessSection />
   </main>

@@ -1,13 +1,15 @@
-import { catalogProducts } from "../data/products";
+﻿import { catalogProducts } from "../data/products";
 import type {
   CartItem,
-  CatalogAvailabilityFilter,
   CatalogCategory,
   CatalogProduct,
+  CoverageResolveResponse,
+  CustomerResolveResponse,
+  RouteResolveResponse,
 } from "../types/visualet";
 
 type ApiCatalogProduct = {
-  dolibarrProductId: string;
+  productId: string;
   sku: string;
   name: string;
   description: string;
@@ -21,7 +23,14 @@ type ApiCatalogProduct = {
 
 type ApiCatalogResponse = {
   items: ApiCatalogProduct[];
-  source?: "dolibarr" | "dolibarr-fast" | "cache";
+  source?:
+    | "catalog"
+    | "catalog-full"
+    | "catalog-fast"
+    | "cache"
+    | "category"
+    | "cache-category"
+    | "category-unavailable";
   lastSyncedAt?: string;
   pagination?: {
     page: number;
@@ -44,8 +53,13 @@ type ApiCatalogFiltersResponse = {
 const fallbackProducts = catalogProducts;
 const MAX_RENDERED_PRODUCTS = 50;
 const CATALOG_PAGE_SIZE = 50;
+const FULL_CATALOG_PAGE_SIZE = 500;
 const PRODUCTION_VISUALET_API_URL = "https://navajowhite-sardine-989084.hostingersite.com";
-const CATALOG_STORAGE_KEY = "fisherman.catalog.products.v1";
+const CATALOG_STORAGE_KEY = "fisherman.catalog.products.v2";
+const LOCATION_STORAGE_KEY = "fisherman.customer.location.v1";
+const CUSTOMER_KEY_STORAGE_KEY = "fisherman.customer.key.v1";
+const ESSENTIAL_FILTER_CATEGORIES = ["Promociones"];
+const PROMOTIONS_CATEGORY = "Promociones";
 
 function getVisualetApiUrl() {
   if (import.meta.env.PUBLIC_VISUALET_API_URL) {
@@ -60,8 +74,13 @@ function getVisualetApiUrl() {
 }
 
 const visualetApiUrl = getVisualetApiUrl();
+const localPriorityVisualetApiUrl = "http://localhost:8788";
 const fallbackVisualetApiUrl =
-  visualetApiUrl === "http://localhost:8787" ? PRODUCTION_VISUALET_API_URL : "";
+  visualetApiUrl === "http://localhost:8787"
+    ? localPriorityVisualetApiUrl
+    : visualetApiUrl === localPriorityVisualetApiUrl
+      ? PRODUCTION_VISUALET_API_URL
+      : "";
 
 function getRequiredElement<T extends Element>(selector: string) {
   const element = document.querySelector<T>(selector);
@@ -79,9 +98,105 @@ function getOptionalElement<T extends Element>(selector: string) {
 
 function normalizeText(value: string) {
   return value
+    .trim()
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactRepeatedLetters(value: string) {
+  return value.replace(/([a-z])\1+/g, "$1");
+}
+
+function getMaxFuzzyDistance(length: number) {
+  if (length <= 4) return 1;
+  if (length <= 8) return 2;
+  return 3;
+}
+
+function levenshteinDistance(a: string, b: string, maxDistance: number) {
+  if (Math.abs(a.length - b.length) > maxDistance) return maxDistance + 1;
+
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    let rowMin = current[0];
+
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const value = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + cost,
+      );
+
+      current[j] = value;
+      rowMin = Math.min(rowMin, value);
+    }
+
+    if (rowMin > maxDistance) return maxDistance + 1;
+
+    previous = current;
+  }
+
+  return previous[b.length];
+}
+
+function tokenMatches(searchToken: string, candidateToken: string) {
+  if (searchToken === candidateToken) return true;
+
+  const minLength = Math.min(searchToken.length, candidateToken.length);
+
+  if (
+    minLength >= 3 &&
+    (candidateToken.includes(searchToken) || searchToken.includes(candidateToken))
+  ) {
+    return true;
+  }
+
+  const compactSearch = compactRepeatedLetters(searchToken);
+  const compactCandidate = compactRepeatedLetters(candidateToken);
+
+  if (
+    Math.min(compactSearch.length, compactCandidate.length) >= 3 &&
+    (compactCandidate.includes(compactSearch) ||
+      compactSearch.includes(compactCandidate))
+  ) {
+    return true;
+  }
+
+  const maxDistance = getMaxFuzzyDistance(Math.max(compactSearch.length, compactCandidate.length));
+
+  return levenshteinDistance(compactSearch, compactCandidate, maxDistance) <= maxDistance;
+}
+
+function fuzzyIncludes(search: string, candidate: string) {
+  const normalizedSearch = normalizeText(search);
+  const normalizedCandidate = normalizeText(candidate);
+
+  if (!normalizedSearch) return true;
+  if (!normalizedCandidate) return false;
+  if (
+    normalizedCandidate.includes(normalizedSearch) ||
+    compactRepeatedLetters(normalizedCandidate).includes(
+      compactRepeatedLetters(normalizedSearch),
+    )
+  ) {
+    return true;
+  }
+
+  const searchTokens = normalizedSearch.split(" ").filter((token) => token.length >= 2);
+  const candidateTokens = normalizedCandidate.split(" ").filter((token) => token.length >= 2);
+
+  if (searchTokens.length === 0) return true;
+
+  return searchTokens.every((searchToken) =>
+    candidateTokens.some((candidateToken) => tokenMatches(searchToken, candidateToken)),
+  );
 }
 
 function escapeHtml(value: string) {
@@ -100,30 +215,6 @@ function resolveApiUrl(path?: string) {
   return `${visualetApiUrl}/${path}`;
 }
 
-function getAvailabilityKey(value?: string): CatalogAvailabilityFilter {
-  const normalized = normalizeText(value ?? "");
-
-  if (normalized.includes("pocas")) return "pocas";
-  if (normalized.includes("no disponible")) return "no-disponible";
-  if (normalized.includes("disponible")) return "disponible";
-
-  return "disponible";
-}
-
-function getAvailabilityClasses(value?: string) {
-  const key = getAvailabilityKey(value);
-
-  if (key === "no-disponible") {
-    return "bg-rose-50 text-rose-700 border-rose-100";
-  }
-
-  if (key === "pocas") {
-    return "bg-amber-50 text-amber-700 border-amber-100";
-  }
-
-  return "bg-emerald-50 text-emerald-700 border-emerald-100";
-}
-
 function getPrimaryTag(product: Pick<CatalogProduct, "categories" | "tag">) {
   return product.categories?.[0] ?? product.tag;
 }
@@ -140,16 +231,25 @@ function isFilterCategory(category: string) {
   return true;
 }
 
+function getCategoryBadgeClasses(category: string) {
+  return normalizeText(category) === "promociones"
+    ? "inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-800"
+    : "inline-flex rounded-full bg-cyan-50 px-3 py-1 text-xs font-black text-[#0F4C5C]";
+}
+
 function initCatalogPage() {
   const searchInput = getRequiredElement<HTMLInputElement>("#catalog-search");
   const categorySelect = getRequiredElement<HTMLSelectElement>("#catalog-category");
-  const availabilitySelect = getRequiredElement<HTMLSelectElement>("#catalog-availability");
   const categoryButtonsContainer = getRequiredElement<HTMLDivElement>("#catalog-category-buttons");
   const grid = getRequiredElement<HTMLDivElement>("#catalog-grid");
   const loadMoreButton = getRequiredElement<HTMLButtonElement>("#catalog-load-more");
   const catalogSource = getRequiredElement<HTMLParagraphElement>("#catalog-source");
   const catalogCount = getRequiredElement<HTMLParagraphElement>("#catalog-count");
   const emptyState = getRequiredElement<HTMLDivElement>("#catalog-empty");
+  const promotionsPanel = getRequiredElement<HTMLElement>("#promotions-panel");
+  const promotionsStatus = getRequiredElement<HTMLParagraphElement>("#promotions-status");
+  const promotionsList = getRequiredElement<HTMLDivElement>("#promotions-list");
+  const viewPromotionsButton = getRequiredElement<HTMLButtonElement>("#view-promotions");
   const cartList = getRequiredElement<HTMLDivElement>("#cart-list");
   const cartEmpty = getRequiredElement<HTMLDivElement>("#cart-empty");
   const cartSummary = getRequiredElement<HTMLParagraphElement>("#cart-summary");
@@ -176,11 +276,28 @@ function initCatalogPage() {
   const zoomOutButton = getRequiredElement<HTMLButtonElement>("#product-image-zoom-out");
   const bootScreen = getOptionalElement<HTMLDivElement>("#catalog-boot-screen");
   const bootStatus = getOptionalElement<HTMLParagraphElement>("#catalog-boot-status");
+  const bootProgressBar = getOptionalElement<HTMLDivElement>("#catalog-boot-progress-bar");
+  const bootProgressLabel = getOptionalElement<HTMLParagraphElement>("#catalog-boot-progress-label");
+  const bootCheckpointPromotions = getOptionalElement<HTMLDivElement>("#boot-checkpoint-promotions");
+  const bootCheckpointCategories = getOptionalElement<HTMLDivElement>("#boot-checkpoint-categories");
+  const bootCheckpointProducts = getOptionalElement<HTMLDivElement>("#boot-checkpoint-products");
+  const bootCheckpointCoverage = getOptionalElement<HTMLDivElement>("#boot-checkpoint-coverage");
+  const bootGameTarget = getOptionalElement<HTMLButtonElement>("#catalog-boot-target");
+  const bootGameScore = getOptionalElement<HTMLParagraphElement>("#catalog-boot-score");
   const bootWaitButton = getOptionalElement<HTMLButtonElement>("#catalog-boot-wait");
   const bootSkipButton = getOptionalElement<HTMLButtonElement>("#catalog-boot-skip");
+  const customerLocationInput = getRequiredElement<HTMLInputElement>("#customer-location");
+  const resolveCoverageButton = getRequiredElement<HTMLButtonElement>("#resolve-coverage");
+  const customerKeyInput = getRequiredElement<HTMLInputElement>("#customer-key");
+  const resolveCustomerButton = getRequiredElement<HTMLButtonElement>("#resolve-customer");
+  const clearCustomerButton = getRequiredElement<HTMLButtonElement>("#clear-customer");
+  const customerMessage = getRequiredElement<HTMLParagraphElement>("#customer-message");
+  const routeStatusPill = getRequiredElement<HTMLSpanElement>("#route-status-pill");
+  const routeMessageTitle = getRequiredElement<HTMLParagraphElement>("#route-message-title");
+  const routeMessageSummary = getRequiredElement<HTMLParagraphElement>("#route-message-summary");
+  const routeMessageDetail = getRequiredElement<HTMLParagraphElement>("#route-message-detail");
 
   let selectedCategory: CatalogCategory = "todos";
-  let selectedAvailability: CatalogAvailabilityFilter = "todos";
   let products: CatalogProduct[] = fallbackProducts;
   let cart: CartItem[] = [];
   let imageZoom = 1;
@@ -192,10 +309,19 @@ function initCatalogPage() {
   let fastCatalogRetryCount = 0;
   let searchDebounceTimeout: number | undefined;
   let activeServerSearch = "";
+  let activeServerCategory = "todos";
   let globalFilterCategories: string[] = [];
   let filterRetryTimeout: number | undefined;
   let bootScreenTimer: number | undefined;
   let bootScreenDismissed = false;
+  let routeInfo: RouteResolveResponse | null = null;
+  let customerInfo: CustomerResolveResponse | null = null;
+  let coverageInfo: CoverageResolveResponse | null = null;
+  let catalogRequestId = 0;
+  let promotionProducts: CatalogProduct[] = [];
+  let initialFullCatalogLoaded = false;
+  let bootGameScoreValue = 0;
+  let bootGameTimer: number | undefined;
 
   function formatPrice(value: number) {
     return new Intl.NumberFormat("es-MX", {
@@ -206,8 +332,8 @@ function initCatalogPage() {
 
   function mapApiProduct(product: ApiCatalogProduct): CatalogProduct {
     return {
-      id: product.dolibarrProductId,
-      dolibarrProductId: product.dolibarrProductId,
+      id: product.productId,
+      productId: product.productId,
       name: product.name,
       category: product.categories?.find(isFilterCategory) ?? "sin_categoria",
       tag: product.sku || "Fisherman",
@@ -232,12 +358,63 @@ function initCatalogPage() {
     }
   }
 
-  function showBootScreen() {
-    if (!bootScreen || bootScreenDismissed) return;
+  function updateBootProgress(progress: number, label: string) {
+    const safeProgress = Math.max(0, Math.min(100, progress));
 
+    if (bootProgressBar) {
+      bootProgressBar.style.width = `${safeProgress}%`;
+    }
+
+    if (bootProgressLabel) {
+      bootProgressLabel.textContent = label;
+    }
+  }
+
+  function markBootCheckpoint(
+    checkpoint: HTMLDivElement | null,
+    state: "idle" | "active" | "done",
+  ) {
+    if (!checkpoint) return;
+
+    checkpoint.dataset.state = state;
+  }
+
+  function moveBootGameTarget() {
+    if (!bootGameTarget) return;
+
+    const x = 14 + Math.random() * 72;
+    const y = 18 + Math.random() * 64;
+
+    bootGameTarget.style.left = `${x}%`;
+    bootGameTarget.style.top = `${y}%`;
+  }
+
+  function startBootGame() {
+    if (!bootGameTarget || bootGameTimer) return;
+
+    moveBootGameTarget();
+    bootGameTimer = window.setInterval(moveBootGameTarget, 1150);
+  }
+
+  function stopBootGame() {
+    if (!bootGameTimer) return;
+
+    window.clearInterval(bootGameTimer);
+    bootGameTimer = undefined;
+  }
+
+  function showBootScreen() {
+    if (!bootScreen) return;
+
+    bootScreenDismissed = false;
     bootScreen.classList.remove("hidden");
     bootScreen.setAttribute("aria-hidden", "false");
     document.body.style.overflow = "hidden";
+    bootGameScoreValue = 0;
+    if (bootGameScore) {
+      bootGameScore.textContent = "0 capturas";
+    }
+    startBootGame();
   }
 
   function hideBootScreen() {
@@ -252,10 +429,11 @@ function initCatalogPage() {
     bootScreen.classList.add("hidden");
     bootScreen.setAttribute("aria-hidden", "true");
     document.body.style.overflow = "";
+    stopBootGame();
   }
 
   function scheduleBootScreen() {
-    if (bootScreenTimer || bootScreenDismissed || readStoredCatalog()) return;
+    if (bootScreenTimer) return;
 
     bootScreenTimer = window.setTimeout(() => {
       bootScreenTimer = undefined;
@@ -263,17 +441,34 @@ function initCatalogPage() {
     }, 700);
   }
 
-  async function fetchCatalogPage(apiUrl: string, page: number, search: string) {
+  async function fetchCatalogPage(
+    apiUrl: string,
+    page: number,
+    search: string,
+    category = activeServerCategory,
+    options: { mode?: "full"; limit?: number } = {},
+  ) {
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 9000);
+    const timeoutId = window.setTimeout(
+      () => controller.abort(),
+      options.mode === "full" ? 45000 : category && category !== "todos" ? 18000 : 12000,
+    );
     const params = new URLSearchParams({
       audience: "customer",
       page: String(page),
-      limit: String(CATALOG_PAGE_SIZE),
+      limit: String(options.limit ?? CATALOG_PAGE_SIZE),
     });
 
     if (search) {
       params.set("q", search);
+    }
+
+    if (category && category !== "todos") {
+      params.set("category", category);
+    }
+
+    if (options.mode) {
+      params.set("mode", options.mode);
     }
 
     try {
@@ -304,6 +499,190 @@ function initCatalogPage() {
     }
   }
 
+  async function fetchCoverageResolution(apiUrl: string, location: string) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 7000);
+    const params = new URLSearchParams({ location });
+
+    try {
+      const response = await fetch(`${apiUrl}/coverage/resolve?${params.toString()}`, {
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Visualet coverage responded with ${response.status}`);
+      }
+
+      return (await response.json()) as CoverageResolveResponse;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  async function fetchCustomerResolution(apiUrl: string, key: string) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+    const params = new URLSearchParams({ key });
+
+    try {
+      const response = await fetch(`${apiUrl}/customers/resolve?${params.toString()}`, {
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Visualet customers responded with ${response.status}`);
+      }
+
+      return (await response.json()) as CustomerResolveResponse;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  function getCoverageFallback(location: string): CoverageResolveResponse {
+    const hasLocation = Boolean(location.trim());
+
+    return {
+      status: hasLocation ? "coverage_unknown" : "coverage_location_required",
+      location,
+      covered: false,
+      route: null,
+      calendar: null,
+      messages: {
+        title: hasLocation ? "Zona por validar" : "Ubicacion por confirmar",
+        summary: hasLocation
+          ? "Fisherman revisara si puede atender tu zona."
+          : "Escribe tu municipio, colonia o localidad para revisar cobertura.",
+        detail: "Puedes enviar tu solicitud; precio, stock, pago y entrega se confirman antes de cerrar.",
+      },
+    };
+  }
+
+  function renderRouteInfo(info: RouteResolveResponse) {
+    routeInfo = info;
+    routeMessageTitle.textContent = info.messages.title;
+    routeMessageSummary.textContent = info.messages.summary;
+    routeMessageDetail.textContent = info.messages.detail;
+
+    if (info.status === "route_active_now") {
+      routeStatusPill.textContent = "Activa";
+      routeStatusPill.className =
+        "rounded-full bg-emerald-300/15 px-3 py-1 text-xs font-black text-emerald-200";
+    } else if (info.status === "route_upcoming") {
+      routeStatusPill.textContent = "Próxima";
+      routeStatusPill.className =
+        "rounded-full bg-cyan-300/10 px-3 py-1 text-xs font-black text-cyan-200";
+    } else {
+      routeStatusPill.textContent = "Por confirmar";
+      routeStatusPill.className =
+        "rounded-full bg-amber-300/15 px-3 py-1 text-xs font-black text-amber-200";
+    }
+
+    updateWhatsAppLink();
+  }
+
+  function renderCoverageInfo(info: CoverageResolveResponse) {
+    coverageInfo = info;
+
+    const routeStatus =
+      info.status === "coverage_active_now"
+        ? "route_active_now"
+        : info.status === "coverage_upcoming"
+          ? "route_upcoming"
+          : "route_unassigned";
+
+    renderRouteInfo({
+      route: {
+        id: info.route?.id ?? "zona_por_validar",
+        name: info.covered ? "Zona con cobertura" : "Zona por validar",
+      },
+      status: routeStatus,
+      calendar: info.calendar,
+      messages: info.messages,
+    });
+  }
+
+  function renderCustomerInfo(info: CustomerResolveResponse | null) {
+    customerInfo = info;
+
+    if (!info) {
+      customerMessage.textContent =
+        "Si ya eres cliente, Visualet puede revisar cobertura desde tu cuenta.";
+      updateWhatsAppLink();
+      return;
+    }
+
+    customerMessage.textContent = `${info.messages.summary} ${info.messages.detail}`;
+    renderRouteInfo(info.route_resolution);
+  }
+
+  async function loadCoverageCalendar(location: string) {
+    window.localStorage.setItem(LOCATION_STORAGE_KEY, location);
+    renderCoverageInfo({
+      status: "coverage_location_required",
+      location,
+      covered: false,
+      route: null,
+      calendar: null,
+      messages: {
+        title: "Revisando cobertura",
+        summary: "Estamos revisando si hay atencion proxima para tu zona.",
+        detail: "Fisherman confirmara precio, stock, pago y entrega antes de programar.",
+      },
+    });
+
+    try {
+      let info: CoverageResolveResponse;
+
+      try {
+        info = await fetchCoverageResolution(visualetApiUrl, location);
+      } catch (error) {
+        if (!fallbackVisualetApiUrl) throw error;
+        info = await fetchCoverageResolution(fallbackVisualetApiUrl, location);
+      }
+
+      renderCoverageInfo(info);
+    } catch (error) {
+      console.warn("Unable to resolve coverage:", error);
+      renderCoverageInfo(getCoverageFallback(location));
+    }
+  }
+
+  async function resolveCustomerIdentity(key: string) {
+    const cleanKey = key.trim();
+
+    window.localStorage.setItem(CUSTOMER_KEY_STORAGE_KEY, cleanKey);
+    customerMessage.textContent = cleanKey
+      ? "Buscando cliente en Fisherman..."
+      : "Escribe tu clave, telefono o correo para revisar tu cobertura.";
+
+    if (!cleanKey) {
+      renderCustomerInfo(null);
+      void loadCoverageCalendar(customerLocationInput.value);
+      return;
+    }
+
+    try {
+      let info: CustomerResolveResponse;
+
+      try {
+        info = await fetchCustomerResolution(visualetApiUrl, cleanKey);
+      } catch (error) {
+        if (!fallbackVisualetApiUrl) throw error;
+        info = await fetchCustomerResolution(fallbackVisualetApiUrl, cleanKey);
+      }
+
+      renderCustomerInfo(info);
+
+    } catch (error) {
+      console.warn("Unable to resolve customer:", error);
+      customerMessage.textContent =
+        "No pudimos detectar tu cuenta ahora. Puedes enviar tu solicitud y Fisherman la revisara.";
+      renderCustomerInfo(null);
+      void loadCoverageCalendar(customerLocationInput.value);
+    }
+  }
+
   function readStoredCatalog(): CachedCatalogResponse | null {
     try {
       const rawCatalog = window.localStorage.getItem(CATALOG_STORAGE_KEY);
@@ -329,7 +708,7 @@ function initCatalogPage() {
       const itemsById = new Map<string, ApiCatalogProduct>();
 
       [...existingItems, ...data.items].forEach((item) => {
-        itemsById.set(item.dolibarrProductId, item);
+        itemsById.set(item.productId, item);
       });
 
       window.localStorage.setItem(
@@ -374,61 +753,325 @@ function initCatalogPage() {
     renderProducts();
   }
 
+  function renderPromotions() {
+    promotionsPanel.classList.toggle("hidden", promotionProducts.length === 0);
+
+    if (promotionProducts.length === 0) {
+      promotionsList.innerHTML = "";
+      return;
+    }
+
+    promotionsStatus.textContent =
+      promotionProducts.length === 1
+        ? "1 producto en promoción listo para solicitar."
+        : `${promotionProducts.length} productos en promoción listos para solicitar.`;
+
+    promotionsList.innerHTML = promotionProducts
+      .slice(0, 4)
+      .map(
+        (product) => `
+          <article class="grid gap-3 rounded-2xl border border-amber-200 bg-white p-3 md:grid-cols-[1fr_auto] md:items-center">
+            <div class="min-w-0">
+              <p class="text-xs font-black uppercase tracking-[0.14em] text-amber-700">
+                Promociones
+              </p>
+              <h3 class="mt-1 text-sm font-black leading-snug text-slate-950 md:text-base">
+                ${escapeHtml(product.name)}
+              </h3>
+              <p class="mt-1 text-xs font-bold text-slate-500">
+                ${escapeHtml(product.priceText)}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              data-add-product="${escapeHtml(product.id)}"
+              class="min-h-10 rounded-full bg-[#0F4C5C] px-4 text-sm font-black text-white transition hover:bg-[#0B3D4A]"
+            >
+              Agregar
+            </button>
+          </article>
+        `,
+      )
+      .join("");
+  }
+
+  async function loadPriorityPromotions() {
+    showBootScreen();
+    markBootCheckpoint(bootCheckpointPromotions, "active");
+    updateBootProgress(12, "Objetivo 1/4");
+    updateBootStatus("Buscando Promociones en Fisherman...");
+    promotionsStatus.textContent = "Cargando promociones...";
+
+    try {
+      let response: Response;
+
+      try {
+        response = await fetchCatalogPage(
+          visualetApiUrl,
+          0,
+          "",
+          PROMOTIONS_CATEGORY,
+        );
+      } catch (error) {
+        if (!fallbackVisualetApiUrl) throw error;
+        response = await fetchCatalogPage(
+          fallbackVisualetApiUrl,
+          0,
+          "",
+          PROMOTIONS_CATEGORY,
+        );
+      }
+
+      if (!response.ok && fallbackVisualetApiUrl) {
+        response = await fetchCatalogPage(
+          fallbackVisualetApiUrl,
+          0,
+          "",
+          PROMOTIONS_CATEGORY,
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(`Visualet promotions responded with ${response.status}`);
+      }
+
+      let data = (await response.json()) as ApiCatalogResponse;
+
+      if (
+        data.source === "category-unavailable" &&
+        fallbackVisualetApiUrl &&
+        fallbackVisualetApiUrl !== visualetApiUrl
+      ) {
+        const fallbackResponse = await fetchCatalogPage(
+          fallbackVisualetApiUrl,
+          0,
+          "",
+          PROMOTIONS_CATEGORY,
+        );
+
+        if (fallbackResponse.ok) {
+          data = (await fallbackResponse.json()) as ApiCatalogResponse;
+        }
+      }
+
+      promotionProducts = Array.isArray(data.items)
+        ? data.items.map(mapApiProduct)
+        : [];
+
+      if (promotionProducts.length === 0) {
+        promotionsStatus.textContent = "Sin promociones cargadas por ahora.";
+      } else {
+        updateBootStatus(`${promotionProducts.length} promocion(es) lista(s) para priorizar.`);
+      }
+
+      renderPromotions();
+      if (selectedCategory === PROMOTIONS_CATEGORY) {
+        products = promotionProducts;
+        catalogTotal = promotionProducts.length;
+        hasMoreCatalogProducts = false;
+        nextCatalogPage = 1;
+        renderCategoryFilters();
+        renderProducts();
+      }
+      markBootCheckpoint(bootCheckpointPromotions, "done");
+      updateBootProgress(30, "Promociones listas");
+    } catch (error) {
+      console.warn("Unable to load priority promotions:", error);
+      promotionsStatus.textContent = "No pudimos cargar promociones ahora.";
+      promotionProducts = [];
+      renderPromotions();
+      markBootCheckpoint(bootCheckpointPromotions, "done");
+      updateBootProgress(24, "Promociones revisadas");
+    }
+  }
+
   function updateLoadMoreButton() {
     loadMoreButton.classList.toggle("hidden", !hasMoreCatalogProducts);
     loadMoreButton.disabled = isLoadingCatalogProducts;
     loadMoreButton.textContent = isLoadingCatalogProducts
       ? "Cargando..."
       : catalogTotal
-        ? `Ver mas productos (${products.length} de ${catalogTotal})`
-        : "Ver mas productos";
+        ? `Ver más productos (${products.length} de ${catalogTotal})`
+        : "Ver más productos";
   }
 
-  async function loadProductsFromApi(page = 0, append = false, search = activeServerSearch) {
-    if (isLoadingCatalogProducts) return;
+  async function loadProductsFromApi(
+    page = 0,
+    append = false,
+    search = activeServerSearch,
+    options: { force?: boolean; mode?: "full" } = {},
+  ) {
+    if (isLoadingCatalogProducts && !options.force) return;
 
+    const requestId = catalogRequestId + 1;
+    catalogRequestId = requestId;
     isLoadingCatalogProducts = true;
+    const requestLimit =
+      options.mode === "full" ? FULL_CATALOG_PAGE_SIZE : CATALOG_PAGE_SIZE;
     updateLoadMoreButton();
     if (page === 0 && !append) {
       scheduleBootScreen();
+      markBootCheckpoint(bootCheckpointProducts, "active");
+      updateBootProgress(options.mode === "full" ? 56 : 42, "Cargando catálogo");
     }
 
     try {
       updateCatalogSource(
-        page === 0 ? "Sincronizando catalogo..." : "Cargando mas productos...",
+        page === 0 ? "Sincronizando catálogo..." : "Cargando más productos...",
       );
-      updateBootStatus("Conectando con Dolibarr...");
+      updateBootStatus(
+        options.mode === "full"
+          ? "Cargando todos los productos desde Fisherman..."
+          : "Conectando con Fisherman...",
+      );
 
       let response: Response;
 
       try {
-        response = await fetchCatalogPage(visualetApiUrl, page, search);
+        response = await fetchCatalogPage(visualetApiUrl, page, search, activeServerCategory, {
+          mode: options.mode,
+          limit: requestLimit,
+        });
       } catch (error) {
         updateBootStatus("Usando ruta de respaldo Fisherman...");
         if (!fallbackVisualetApiUrl) throw error;
-        response = await fetchCatalogPage(fallbackVisualetApiUrl, page, search);
+        response = await fetchCatalogPage(fallbackVisualetApiUrl, page, search, activeServerCategory, {
+          mode: options.mode,
+          limit: requestLimit,
+        });
       }
 
       if (!response.ok && fallbackVisualetApiUrl) {
-        updateBootStatus("Reintentando conexion del catalogo...");
-        response = await fetchCatalogPage(fallbackVisualetApiUrl, page, search);
+        updateBootStatus("Reintentando conexión del catálogo...");
+        response = await fetchCatalogPage(fallbackVisualetApiUrl, page, search, activeServerCategory, {
+          mode: options.mode,
+          limit: requestLimit,
+        });
       }
 
       if (!response.ok) {
         throw new Error(`Visualet API responded with ${response.status}`);
       }
 
-      const data = (await response.json()) as ApiCatalogResponse;
+      let data = (await response.json()) as ApiCatalogResponse;
+
+      if (
+        data.source === "category-unavailable" &&
+        activeServerCategory !== "todos" &&
+        fallbackVisualetApiUrl &&
+        fallbackVisualetApiUrl !== visualetApiUrl
+      ) {
+        updateCatalogSource(`Reintentando ${activeServerCategory}...`);
+        const fallbackResponse = await fetchCatalogPage(
+          fallbackVisualetApiUrl,
+          page,
+          search,
+          activeServerCategory,
+          { mode: options.mode, limit: requestLimit },
+        );
+
+        if (fallbackResponse.ok) {
+          data = (await fallbackResponse.json()) as ApiCatalogResponse;
+        }
+      }
+
+      if (
+        options.mode === "full" &&
+        page === 0 &&
+        !append &&
+        activeServerCategory === "todos"
+      ) {
+        const itemsById = new Map<string, ApiCatalogProduct>();
+        data.items.forEach((item) => itemsById.set(item.productId, item));
+
+        let nextPageToLoad = (data.pagination?.page ?? 0) + 1;
+        const expectedTotal = data.pagination?.total ?? data.items.length;
+
+        while (data.pagination?.hasMore && requestId === catalogRequestId) {
+          const loadedCount = itemsById.size;
+          const progress = expectedTotal
+            ? 58 + Math.min(28, Math.round((loadedCount / expectedTotal) * 28))
+            : 62;
+
+          updateBootProgress(progress, `${loadedCount} de ${expectedTotal} productos`);
+          updateBootStatus("Terminando de cargar productos, categorías y etiquetas...");
+
+          let nextResponse: Response;
+
+          try {
+            nextResponse = await fetchCatalogPage(
+              visualetApiUrl,
+              nextPageToLoad,
+              search,
+              activeServerCategory,
+              { mode: options.mode, limit: requestLimit },
+            );
+          } catch (error) {
+            if (!fallbackVisualetApiUrl) throw error;
+            nextResponse = await fetchCatalogPage(
+              fallbackVisualetApiUrl,
+              nextPageToLoad,
+              search,
+              activeServerCategory,
+              { mode: options.mode, limit: requestLimit },
+            );
+          }
+
+          if (!nextResponse.ok) {
+            throw new Error(`Visualet API responded with ${nextResponse.status}`);
+          }
+
+          const nextData = (await nextResponse.json()) as ApiCatalogResponse;
+
+          if (!Array.isArray(nextData.items)) {
+            throw new Error("Visualet API response is missing items");
+          }
+
+          nextData.items.forEach((item) => itemsById.set(item.productId, item));
+
+          data = {
+            ...nextData,
+            items: Array.from(itemsById.values()),
+            source: nextData.source ?? data.source,
+            lastSyncedAt: nextData.lastSyncedAt ?? data.lastSyncedAt,
+            pagination: {
+              page: 0,
+              limit: itemsById.size,
+              total: nextData.pagination?.total ?? expectedTotal,
+              hasMore: Boolean(nextData.pagination?.hasMore),
+            },
+          };
+
+          nextPageToLoad += 1;
+        }
+      }
+
+      if (requestId !== catalogRequestId) return;
 
       if (!Array.isArray(data.items)) {
         throw new Error("Visualet API response is missing items");
       }
 
       storeCatalog(data);
-      useCatalogData(data, `Datos Fisherman (${data.source ?? "api"})`, append);
-      hideBootScreen();
+      useCatalogData(data, "Datos Fisherman", append);
+      if (page === 0 && !append) {
+        markBootCheckpoint(bootCheckpointProducts, "done");
+        updateBootProgress(88, `${data.items.length} productos cargados`);
+        if (options.mode === "full") {
+          updateBootStatus("Validando categorías finales...");
+          await loadCatalogFilters();
+          updateBootProgress(96, "Categorías finales listas");
+        }
+      }
 
-      if (data.source === "dolibarr-fast" && fastCatalogRetryCount < 2 && !append) {
+      if (data.source !== "catalog-fast" || append || activeServerCategory !== "todos") {
+        initialFullCatalogLoaded ||= options.mode === "full";
+        updateBootProgress(100, "Catálogo listo");
+        hideBootScreen();
+      }
+
+      if (data.source === "catalog-fast" && fastCatalogRetryCount < 2 && !append) {
         fastCatalogRetryCount += 1;
         updateCatalogSource("Datos Fisherman - cargando etiquetas y total...");
         updateBootStatus("Cargando etiquetas y total de productos...");
@@ -438,6 +1081,8 @@ function initCatalogPage() {
         }, fastCatalogRetryCount === 1 ? 8000 : 18000);
       }
     } catch (error) {
+      if (requestId !== catalogRequestId) return;
+
       console.warn("Using local catalog fallback:", error);
 
       const storedCatalog = readStoredCatalog();
@@ -461,14 +1106,16 @@ function initCatalogPage() {
 
       products = fallbackProducts;
       renderCategoryFilters();
-      updateCatalogSource("Catalogo local de respaldo");
-      updateBootStatus("Entrando con catalogo de respaldo...");
+      updateCatalogSource("Catálogo local de respaldo");
+      updateBootStatus("Entrando con catálogo de respaldo...");
       hasMoreCatalogProducts = false;
       renderProducts();
       hideBootScreen();
     } finally {
-      isLoadingCatalogProducts = false;
-      updateLoadMoreButton();
+      if (requestId === catalogRequestId) {
+        isLoadingCatalogProducts = false;
+        updateLoadMoreButton();
+      }
     }
   }
 
@@ -479,11 +1126,21 @@ function initCatalogPage() {
       ),
     );
 
-    return Array.from(new Set([...globalFilterCategories, ...productCategories]))
+    return Array.from(
+      new Set([
+        ...ESSENTIAL_FILTER_CATEGORIES,
+        ...globalFilterCategories,
+        ...productCategories,
+      ]),
+    )
       .sort((a, b) => a.localeCompare(b, "es"));
   }
 
   async function loadCatalogFilters() {
+    markBootCheckpoint(bootCheckpointCategories, "active");
+    updateBootProgress(Math.max(32, bootProgressBar ? Number.parseFloat(bootProgressBar.style.width) || 32 : 32), "Leyendo categorías");
+    updateBootStatus("Leyendo categorías de productos desde Fisherman...");
+
     try {
       let data: ApiCatalogFiltersResponse;
 
@@ -496,6 +1153,8 @@ function initCatalogPage() {
 
       globalFilterCategories = data.items.filter(isFilterCategory);
       renderCategoryFilters();
+      markBootCheckpoint(bootCheckpointCategories, "done");
+      updateBootProgress(46, "Categorías listas");
 
       if (data.warming && globalFilterCategories.length === 0 && !filterRetryTimeout) {
         filterRetryTimeout = window.setTimeout(() => {
@@ -505,7 +1164,26 @@ function initCatalogPage() {
       }
     } catch (error) {
       console.warn("Unable to load catalog filters:", error);
+      markBootCheckpoint(bootCheckpointCategories, "done");
     }
+  }
+
+  async function bootstrapCatalog() {
+    showBootScreen();
+    updateBootProgress(4, "Iniciando");
+    updateBootStatus("Preparando sincronización Fisherman...");
+    markBootCheckpoint(bootCheckpointCoverage, "active");
+
+    await loadPriorityPromotions();
+    await loadCatalogFilters();
+
+    markBootCheckpoint(bootCheckpointCoverage, "done");
+    updateBootProgress(52, "Cobertura lista");
+
+    await loadProductsFromApi(0, false, "", {
+      force: true,
+      mode: "full",
+    });
   }
 
   function renderCategoryFilters() {
@@ -555,25 +1233,21 @@ function initCatalogPage() {
   }
 
   function getFilteredProducts() {
-    const search = normalizeText(searchInput.value.trim());
+    const search = searchInput.value.trim();
 
     return products.filter((product) => {
+      const normalizedSelectedCategory = normalizeText(String(selectedCategory));
       const matchesCategory =
         selectedCategory === "todos" ||
-        (product.categories ?? []).includes(selectedCategory);
+        (product.categories ?? []).some(
+          (category) => normalizeText(category) === normalizedSelectedCategory,
+        );
 
-      const productAvailability = getAvailabilityKey(product.availability);
-      const matchesAvailability =
-        selectedAvailability === "todos" ||
-        productAvailability === selectedAvailability;
+      const searchable = `${product.name} ${product.category} ${product.tag} ${product.description} ${(product.categories ?? []).join(" ")}`;
 
-      const searchable = normalizeText(
-        `${product.name} ${product.category} ${product.tag} ${product.description} ${(product.categories ?? []).join(" ")}`,
-      );
+      const matchesSearch = !search || fuzzyIncludes(search, searchable);
 
-      const matchesSearch = !search || searchable.includes(search);
-
-      return matchesCategory && matchesAvailability && matchesSearch;
+      return matchesCategory && matchesSearch;
     });
   }
 
@@ -585,15 +1259,57 @@ function initCatalogPage() {
 
     updateCategoryButtonStyles();
 
-    renderProducts();
-
     if (!shouldFetchProducts) return;
 
-    activeServerSearch = category === "todos" ? searchInput.value.trim() : String(category);
+    activeServerCategory = String(category);
+    activeServerSearch = "";
+    searchInput.value = "";
     nextCatalogPage = 0;
     catalogTotal = undefined;
     hasMoreCatalogProducts = false;
-    void loadProductsFromApi(0, false, activeServerSearch);
+    fastCatalogRetryCount = 0;
+    showBootScreen();
+    updateBootProgress(category === PROMOTIONS_CATEGORY ? 14 : 36, "Cargando categoría");
+    updateBootStatus(
+      category === PROMOTIONS_CATEGORY
+        ? "Cargando Promociones desde Fisherman..."
+        : `Cargando ${String(category)} desde Fisherman...`,
+    );
+    markBootCheckpoint(
+      category === PROMOTIONS_CATEGORY ? bootCheckpointPromotions : bootCheckpointProducts,
+      "active",
+    );
+
+    const canShowPromotionCache =
+      category === PROMOTIONS_CATEGORY && promotionProducts.length > 0;
+
+    if (canShowPromotionCache) {
+      products = promotionProducts;
+      catalogTotal = promotionProducts.length;
+      hasMoreCatalogProducts = false;
+      nextCatalogPage = 1;
+      renderProducts();
+    } else {
+      products = [];
+      grid.innerHTML = `
+        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm font-black text-slate-500">
+          Cargando ${escapeHtml(String(category === "todos" ? "productos" : category))}...
+        </div>
+      `;
+      catalogCount.textContent = "Cargando...";
+    }
+    updateCatalogSource(
+      category === "todos"
+        ? "Cargando productos..."
+        : `Cargando ${String(category)}...`,
+    );
+    void loadProductsFromApi(0, false, activeServerSearch, {
+      force: true,
+      mode:
+        category === "todos" && !activeServerSearch && !initialFullCatalogLoaded
+          ? "full"
+          : undefined,
+    });
   }
 
   function updateCategoryButtonStyles() {
@@ -612,10 +1328,34 @@ function initCatalogPage() {
     return cart.find((item) => item.id === productId)?.quantity ?? 0;
   }
 
+  function findCatalogProduct(productId: string) {
+    return (
+      products.find((item) => item.id === productId) ??
+      promotionProducts.find((item) => item.id === productId)
+    );
+  }
+
+  function getProductDescriptionText(product: CatalogProduct) {
+    const description = product.description.trim();
+    const normalizedDescription = normalizeText(description);
+    const normalizedName = normalizeText(product.name);
+
+    if (!description) return "";
+    if (
+      normalizedDescription === normalizedName ||
+      normalizedDescription.includes(normalizedName) ||
+      normalizedName.includes(normalizedDescription)
+    ) {
+      return "";
+    }
+
+    return description;
+  }
+
   function getProductImageUrl(product: CatalogProduct) {
     if (product.imageUrl) return product.imageUrl;
 
-    const productId = product.dolibarrProductId ?? product.id;
+    const productId = product.productId ?? product.id;
     return `${visualetApiUrl}/catalog/products/${encodeURIComponent(productId)}/image`;
   }
 
@@ -625,7 +1365,7 @@ function initCatalogPage() {
   }
 
   function openImageModal(productId: string) {
-    const product = products.find((item) => item.id === productId);
+    const product = findCatalogProduct(productId);
 
     if (!product) return;
 
@@ -650,8 +1390,7 @@ function initCatalogPage() {
     const renderedProducts = filteredProducts.slice(0, MAX_RENDERED_PRODUCTS);
     const hasActiveFilter =
       Boolean(searchInput.value.trim()) ||
-      selectedCategory !== "todos" ||
-      selectedAvailability !== "todos";
+      selectedCategory !== "todos";
 
     grid.innerHTML = "";
     catalogCount.textContent = activeServerSearch && catalogTotal
@@ -667,10 +1406,8 @@ function initCatalogPage() {
 
     renderedProducts.forEach((product) => {
       const quantity = getProductQuantity(product.id);
-      const availability = product.availability ?? "Disponible";
-      const availabilityKey = getAvailabilityKey(availability);
-      const isUnavailable = availabilityKey === "no-disponible";
       const categoryBadges = (product.categories ?? []).slice(0, 3);
+      const descriptionText = getProductDescriptionText(product);
       const taxLabel = product.priceIncludesTax ? "IVA incluido" : "Sin IVA";
       const taxLabelClasses = product.priceIncludesTax
         ? "bg-emerald-50 text-emerald-700 border-emerald-100"
@@ -689,7 +1426,7 @@ function initCatalogPage() {
         >
           <img
             src="${escapeHtml(getProductImageUrl(product))}"
-            alt="Foto de ${escapeHtml(product.name)}"
+            alt=""
             loading="lazy"
             class="h-full w-full object-contain p-1.5 transition group-hover:scale-105 md:p-2"
           />
@@ -701,11 +1438,8 @@ function initCatalogPage() {
 
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-1.5 md:gap-2">
-            <span class="rounded-full border px-2 py-0.5 text-[0.62rem] font-black md:px-3 md:py-1 md:text-xs ${getAvailabilityClasses(availability)}">
-              ${escapeHtml(availability)}
-            </span>
 
-            <span class="hidden rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500 sm:inline-flex">
+            <span class="${getCategoryBadgeClasses(getPrimaryTag(product))}">
               ${escapeHtml(getPrimaryTag(product))}
             </span>
 
@@ -713,7 +1447,7 @@ function initCatalogPage() {
               .slice(1)
               .map(
                 (category) => `
-                  <span class="hidden rounded-full bg-cyan-50 px-3 py-1 text-xs font-black text-[#0F4C5C] md:inline-flex">
+                  <span class="${getCategoryBadgeClasses(category)}">
                     ${escapeHtml(category)}
                   </span>
                 `,
@@ -725,9 +1459,15 @@ function initCatalogPage() {
             ${escapeHtml(product.name)}
           </h3>
 
-          <p class="mt-1 hidden line-clamp-1 text-xs leading-5 text-slate-500 sm:block md:mt-2 md:line-clamp-2 md:text-sm md:leading-6">
-            ${escapeHtml(product.description)}
-          </p>
+          ${
+            descriptionText
+              ? `
+                <p class="mt-1 hidden line-clamp-1 text-xs leading-5 text-slate-500 sm:block md:mt-2 md:line-clamp-2 md:text-sm md:leading-6">
+                  ${escapeHtml(descriptionText)}
+                </p>
+              `
+              : ""
+          }
         </div>
 
         <div class="col-span-2 flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-2.5 py-1.5 md:col-span-1 md:block md:bg-transparent md:px-0 md:py-0 md:text-right">
@@ -767,13 +1507,9 @@ function initCatalogPage() {
           <button
             type="button"
             data-add-product="${escapeHtml(product.id)}"
-            class="min-h-9 flex-1 rounded-full px-3 text-xs font-black transition md:min-h-10 md:flex-none md:px-4 md:text-sm ${
-              isUnavailable
-                ? "bg-slate-100 text-slate-500 hover:bg-slate-200"
-                : "bg-[#0F4C5C] text-white hover:bg-[#0B3D4A]"
-            }"
+            class="min-h-9 flex-1 rounded-full bg-[#0F4C5C] px-3 text-xs font-black text-white transition hover:bg-[#0B3D4A] md:min-h-10 md:flex-none md:px-4 md:text-sm"
           >
-            ${isUnavailable ? "Preguntar" : quantity > 0 ? "Agregar" : "Agregar"}
+            Agregar
           </button>
         </div>
       `;
@@ -783,7 +1519,7 @@ function initCatalogPage() {
   }
 
   function addToCart(productId: string) {
-    const product = products.find((item) => item.id === productId);
+    const product = findCatalogProduct(productId);
 
     if (!product) return;
 
@@ -874,7 +1610,7 @@ function initCatalogPage() {
         </p>
 
         <p class="mt-1 text-xs font-semibold text-cyan-200">
-          ${escapeHtml(product.priceText)} · ${escapeHtml(product.availability ?? "Disponible")}
+          ${escapeHtml(product.priceText)}
         </p>
       `;
 
@@ -897,7 +1633,7 @@ function initCatalogPage() {
 
     if (totals.quantity < 3) {
       cartProgressLabel.textContent = "Solicitud en progreso";
-      cartProgressHint.textContent = "Agrega 3 o mas productos para enviar una solicitud mas completa.";
+      cartProgressHint.textContent = "Agrega 3 o más productos para enviar una solicitud más completa.";
       return;
     }
 
@@ -908,7 +1644,7 @@ function initCatalogPage() {
     }
 
     cartProgressLabel.textContent = "Lista para confirmar";
-    cartProgressHint.textContent = "Tu solicitud se ve completa. Enviala por WhatsApp para confirmar.";
+    cartProgressHint.textContent = "Tu solicitud se ve completa. Envíala por WhatsApp para confirmar.";
   }
 
   function showToast(title: string, message: string) {
@@ -959,9 +1695,7 @@ function initCatalogPage() {
     const lines = cart
       .map((item) => {
         const price = item.priceValue ? ` - ${item.priceText}` : "";
-        const availability = item.availability ? ` - ${item.availability}` : "";
-
-        return `- ${item.quantity} x ${item.name}${price}${availability}`;
+        return `- ${item.quantity} x ${item.name}${price}`;
       })
       .join("\n");
 
@@ -969,13 +1703,35 @@ function initCatalogPage() {
     const totalLine = totals.hasOnlyPricedItems
       ? `\nTotal aproximado: ${formatPrice(totals.amount)}\n`
       : "\n";
+    const coverageLines = routeInfo
+      ? [
+          "",
+          customerLocationInput.value.trim()
+            ? `Ubicacion: ${customerLocationInput.value.trim()}`
+            : "",
+          `Cobertura: ${routeInfo.messages.summary}`,
+        ]
+          .filter(Boolean)
+      : [];
+    const customerLines = customerInfo?.customer
+      ? [
+          "",
+          `Cliente: ${customerInfo.customer.name}`,
+          customerInfo.customer.ref ? `Clave: ${customerInfo.customer.ref}` : "",
+          `Identificacion: ${customerInfo.messages.summary}`,
+        ].filter(Boolean)
+      : customerKeyInput.value.trim()
+        ? ["", `Dato de cliente: ${customerKeyInput.value.trim()}`]
+        : [];
 
     const message = [
       "Hola Fisherman, quiero hacer una solicitud de pedido:",
       "",
       lines,
       totalLine,
-      "Me pueden ayudar a confirmar disponibilidad, precio final y seguimiento?",
+      ...customerLines,
+      ...coverageLines,
+      "¿Me pueden ayudar a confirmar precio final, stock y seguimiento?",
     ].join("\n");
 
     sendOrder.href = `https://wa.me/529631788473?text=${encodeURIComponent(message)}`;
@@ -1025,7 +1781,7 @@ function initCatalogPage() {
               </p>
 
               <p class="mt-1 text-sm text-slate-400">
-                ${escapeHtml(item.priceText)} · ${escapeHtml(item.availability ?? "Disponible")}
+                ${escapeHtml(item.priceText)}
               </p>
             </div>
 
@@ -1094,7 +1850,7 @@ function initCatalogPage() {
       nextCatalogPage = 0;
       catalogTotal = undefined;
       hasMoreCatalogProducts = false;
-      void loadProductsFromApi(0, false, activeServerSearch);
+      void loadProductsFromApi(0, false, activeServerSearch, { force: true });
     }, 420);
   });
 
@@ -1102,10 +1858,8 @@ function initCatalogPage() {
     setCategory((event.target as HTMLSelectElement).value as CatalogCategory);
   });
 
-  availabilitySelect.addEventListener("change", (event) => {
-    selectedAvailability = (event.target as HTMLSelectElement)
-      .value as CatalogAvailabilityFilter;
-    renderProducts();
+  viewPromotionsButton.addEventListener("click", () => {
+    setCategory(PROMOTIONS_CATEGORY);
   });
 
   loadMoreButton.addEventListener("click", () => {
@@ -1147,12 +1901,65 @@ function initCatalogPage() {
   });
 
   bootWaitButton?.addEventListener("click", () => {
-    updateBootStatus("Seguimos sincronizando el catalogo...");
+    updateBootStatus("Seguimos sincronizando el catálogo...");
   });
 
   bootSkipButton?.addEventListener("click", () => {
     updateCatalogSource("Puedes explorar mientras Fisherman sincroniza datos.");
     hideBootScreen();
+  });
+
+  bootGameTarget?.addEventListener("click", () => {
+    bootGameScoreValue += 1;
+
+    if (bootGameScore) {
+      bootGameScore.textContent =
+        bootGameScoreValue === 1
+          ? "1 captura"
+          : `${bootGameScoreValue} capturas`;
+    }
+
+    moveBootGameTarget();
+  });
+
+  resolveCoverageButton.addEventListener("click", () => {
+    renderCustomerInfo(null);
+    void loadCoverageCalendar(customerLocationInput.value);
+  });
+
+  resolveCustomerButton.addEventListener("click", () => {
+    void resolveCustomerIdentity(customerKeyInput.value);
+  });
+
+  customerKeyInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void resolveCustomerIdentity(customerKeyInput.value);
+    }
+  });
+
+  customerKeyInput.addEventListener("input", () => {
+    updateWhatsAppLink();
+  });
+
+  customerLocationInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      renderCustomerInfo(null);
+      void loadCoverageCalendar(customerLocationInput.value);
+    }
+  });
+
+  customerLocationInput.addEventListener("input", () => {
+    window.localStorage.setItem(LOCATION_STORAGE_KEY, customerLocationInput.value);
+    updateWhatsAppLink();
+  });
+
+  clearCustomerButton.addEventListener("click", () => {
+    customerKeyInput.value = "";
+    window.localStorage.removeItem(CUSTOMER_KEY_STORAGE_KEY);
+    renderCustomerInfo(null);
+    void loadCoverageCalendar(customerLocationInput.value);
   });
 
   closeImageModalButton.addEventListener("click", closeImageModal);
@@ -1174,8 +1981,15 @@ function initCatalogPage() {
   renderCategoryFilters();
   setCategory("todos", { fetchProducts: false });
   renderCart();
-  void loadCatalogFilters();
-  void loadProductsFromApi(0, false);
+  customerKeyInput.value = window.localStorage.getItem(CUSTOMER_KEY_STORAGE_KEY) ?? "";
+  customerLocationInput.value =
+    window.localStorage.getItem(LOCATION_STORAGE_KEY) ?? "";
+  if (customerKeyInput.value.trim()) {
+    void resolveCustomerIdentity(customerKeyInput.value);
+  } else {
+    void loadCoverageCalendar(customerLocationInput.value);
+  }
+  void bootstrapCatalog();
 }
 
 if (document.readyState === "loading") {
@@ -1185,3 +1999,4 @@ if (document.readyState === "loading") {
 }
 
 document.addEventListener("astro:page-load", initCatalogPage);
+

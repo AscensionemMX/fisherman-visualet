@@ -1,26 +1,71 @@
-type HeroBlob = {
+import {
+  CHIAPAS_PLACES,
+  CHIAPAS_ROUTES,
+  type ChiapasCoord,
+  type ChiapasRoute,
+  projectChiapasToUnit,
+} from "../data/chiapasMap";
+
+type ScreenPoint = {
   x: number;
   y: number;
-  radius: number;
-  baseRadius: number;
-  vx: number;
-  vy: number;
-  color: "cyan" | "blue" | "red";
-  phase: number;
 };
 
-type HeroParticle = {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  size: number;
-  alpha: number;
+type RoutePulse = {
+  routeIndex: number;
+  speed: number;
+  delay: number;
 };
 
 const prefersReducedMotion = window.matchMedia(
   "(prefers-reduced-motion: reduce)",
 ).matches;
+
+const chiapasShape = [
+  [0.21, 0.21],
+  [0.32, 0.13],
+  [0.49, 0.16],
+  [0.58, 0.25],
+  [0.7, 0.28],
+  [0.81, 0.4],
+  [0.84, 0.58],
+  [0.75, 0.79],
+  [0.62, 0.85],
+  [0.52, 0.8],
+  [0.4, 0.87],
+  [0.27, 0.76],
+  [0.17, 0.64],
+  [0.14, 0.45],
+];
+
+const reliefLines = [
+  [
+    [0.22, 0.34],
+    [0.34, 0.25],
+    [0.48, 0.28],
+    [0.6, 0.4],
+    [0.74, 0.45],
+  ],
+  [
+    [0.25, 0.52],
+    [0.38, 0.48],
+    [0.52, 0.55],
+    [0.66, 0.62],
+    [0.76, 0.7],
+  ],
+  [
+    [0.34, 0.2],
+    [0.44, 0.32],
+    [0.54, 0.38],
+    [0.68, 0.35],
+  ],
+  [
+    [0.18, 0.66],
+    [0.3, 0.68],
+    [0.43, 0.76],
+    [0.56, 0.82],
+  ],
+];
 
 function initHeroCanvas() {
   const canvas = document.querySelector<HTMLCanvasElement>("[data-hero-canvas]");
@@ -39,51 +84,11 @@ function initHeroCanvas() {
   let dpr = Math.min(window.devicePixelRatio || 1, 1.75);
   let frame = 0;
 
-  const blobs: HeroBlob[] = [];
-  const particles: HeroParticle[] = [];
-
-  function randomBetween(min: number, max: number) {
-    return Math.random() * (max - min) + min;
-  }
-
-  function makeBlob(index: number): HeroBlob {
-    const colors: HeroBlob["color"][] = ["cyan", "blue", "red", "blue", "cyan"];
-
-    return {
-      x: randomBetween(0.08, 0.92),
-      y: randomBetween(0.12, 0.86),
-      baseRadius: randomBetween(180, 340),
-      radius: randomBetween(180, 340),
-      vx: randomBetween(-0.00012, 0.00012),
-      vy: randomBetween(-0.0001, 0.0001),
-      color: colors[index % colors.length],
-      phase: Math.random() * Math.PI * 2,
-    };
-  }
-
-  function makeParticle(): HeroParticle {
-    return {
-      x: randomBetween(0, width),
-      y: randomBetween(0, height),
-      vx: randomBetween(-0.18, 0.18),
-      vy: randomBetween(-0.22, 0.22),
-      size: randomBetween(0.8, 2.2),
-      alpha: randomBetween(0.15, 0.55),
-    };
-  }
-
-  function setupScene() {
-    blobs.length = 0;
-    particles.length = 0;
-
-    for (let i = 0; i < 6; i += 1) {
-      blobs.push(makeBlob(i));
-    }
-
-    for (let i = 0; i < 55; i += 1) {
-      particles.push(makeParticle());
-    }
-  }
+  const pulses: RoutePulse[] = CHIAPAS_ROUTES.map((_, index) => ({
+    routeIndex: index,
+    speed: 0.000048 + index * 0.000007,
+    delay: index * 0.15,
+  }));
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
@@ -96,174 +101,260 @@ function initHeroCanvas() {
     canvas.height = Math.max(1, Math.floor(height * dpr));
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    setupScene();
   }
 
-  function getBlobColors(blob: HeroBlob) {
-    if (blob.color === "red") {
-      return {
-        inner: "rgba(248,113,113,0.42)",
-        mid: "rgba(185,28,28,0.18)",
-        outer: "rgba(185,28,28,0)",
-      };
-    }
-
-    if (blob.color === "blue") {
-      return {
-        inner: "rgba(96,165,250,0.5)",
-        mid: "rgba(30,58,138,0.2)",
-        outer: "rgba(30,58,138,0)",
-      };
-    }
+  function mapPoint(coord: ChiapasCoord): ScreenPoint {
+    const point = projectChiapasToUnit(coord);
+    const scale = Math.min(width * 0.92, height * 1.08);
+    const mapWidth = scale;
+    const mapHeight = scale * 0.72;
+    const offsetX = width * 0.5 - mapWidth * 0.5;
+    const offsetY = height * 0.5 - mapHeight * 0.48;
 
     return {
-      inner: "rgba(165,243,252,0.62)",
-      mid: "rgba(56,189,248,0.23)",
-      outer: "rgba(56,189,248,0)",
+      x: offsetX + point.x * mapWidth,
+      y: offsetY + point.y * mapHeight,
     };
   }
 
-  function drawBlob(blob: HeroBlob, time: number) {
-    const x = blob.x * width;
-    const y = blob.y * height;
-    const pulse = 1 + Math.sin(time * 1.2 + blob.phase) * 0.12;
-    const radius = blob.radius * pulse;
+  function unitPoint(point: number[]): ScreenPoint {
+    const scale = Math.min(width * 0.92, height * 1.08);
+    const mapWidth = scale;
+    const mapHeight = scale * 0.72;
+    const offsetX = width * 0.5 - mapWidth * 0.5;
+    const offsetY = height * 0.5 - mapHeight * 0.48;
 
-    const colors = getBlobColors(blob);
+    return {
+      x: offsetX + point[0] * mapWidth,
+      y: offsetY + point[1] * mapHeight,
+    };
+  }
 
-    const gradient = ctx.createRadialGradient(
-      x,
-      y,
-      radius * 0.08,
-      x,
-      y,
-      radius,
+  function routePoints(route: ChiapasRoute) {
+    return route.coords.map(mapPoint);
+  }
+
+  function drawBackground(time: number) {
+    const background = ctx.createLinearGradient(0, 0, width, height);
+    background.addColorStop(0, "#04070C");
+    background.addColorStop(0.44, "#06111A");
+    background.addColorStop(1, "#05070A");
+
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.save();
+    ctx.globalAlpha = 0.2;
+    ctx.strokeStyle = "rgba(148,163,184,0.18)";
+    ctx.lineWidth = 1;
+
+    const gridSize = Math.max(58, Math.min(86, width / 16));
+    const offset = (time * 2.8) % gridSize;
+
+    for (let x = -gridSize + offset; x < width + gridSize; x += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+
+    for (let y = -gridSize + offset; y < height + gridSize; y += gridSize) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  function drawMapShell(time: number) {
+    ctx.save();
+    ctx.beginPath();
+
+    chiapasShape.forEach((point, index) => {
+      const screen = unitPoint(point);
+
+      if (index === 0) {
+        ctx.moveTo(screen.x, screen.y);
+      } else {
+        ctx.lineTo(screen.x, screen.y);
+      }
+    });
+
+    ctx.closePath();
+
+    const fill = ctx.createLinearGradient(0, height * 0.1, width, height * 0.95);
+    fill.addColorStop(0, "rgba(103,232,249,0.18)");
+    fill.addColorStop(0.48, "rgba(15,76,92,0.34)");
+    fill.addColorStop(1, "rgba(2,6,23,0.62)");
+
+    ctx.shadowColor = "rgba(103,232,249,0.18)";
+    ctx.shadowBlur = 44;
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(226,232,240,0.22)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.clip();
+
+    reliefLines.forEach((line, index) => {
+      ctx.beginPath();
+      line.forEach((point, pointIndex) => {
+        const screen = unitPoint([
+          point[0] + Math.sin(time * 0.12 + index) * 0.003,
+          point[1],
+        ]);
+
+        if (pointIndex === 0) ctx.moveTo(screen.x, screen.y);
+        else ctx.lineTo(screen.x, screen.y);
+      });
+      ctx.strokeStyle = index % 2 === 0 ? "rgba(226,232,240,0.18)" : "rgba(6,182,212,0.16)";
+      ctx.lineWidth = index % 2 === 0 ? 2.2 : 1.4;
+      ctx.stroke();
+    });
+
+    ctx.restore();
+
+    const hub = mapPoint(CHIAPAS_PLACES.comitan.coord);
+    const glow = ctx.createRadialGradient(
+      hub.x,
+      hub.y,
+      10,
+      hub.x,
+      hub.y,
+      Math.min(width, height) * (0.3 + Math.sin(time * 0.32) * 0.03),
     );
 
-    gradient.addColorStop(0, colors.inner);
-    gradient.addColorStop(0.42, colors.mid);
-    gradient.addColorStop(1, colors.outer);
+    glow.addColorStop(0, "rgba(103,232,249,0.22)");
+    glow.addColorStop(0.48, "rgba(14,165,233,0.08)");
+    glow.addColorStop(1, "rgba(14,165,233,0)");
+
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  function drawRoute(route: ChiapasRoute, time: number, index: number) {
+    const points = routePoints(route);
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle =
+      route.tone === "promo"
+        ? "rgba(252,211,77,0.36)"
+        : route.tone === "primary"
+          ? "rgba(103,232,249,0.38)"
+          : "rgba(103,232,249,0.26)";
+    ctx.lineWidth = route.tone === "primary" ? 2.6 : 1.8;
+    ctx.setLineDash(route.tone === "primary" ? [22, 16] : [14, 18]);
+    ctx.lineDashOffset = -time * 12 - index * 24;
 
     ctx.beginPath();
-    ctx.fillStyle = gradient;
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fill();
+    points.forEach((point, pointIndex) => {
+      if (pointIndex === 0) ctx.moveTo(point.x, point.y);
+      else ctx.lineTo(point.x, point.y);
+    });
+    ctx.stroke();
+    ctx.restore();
   }
 
-  function drawWaves(time: number) {
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    ctx.lineCap = "round";
+  function pointOnPolyline(points: ScreenPoint[], progress: number) {
+    const distances = points.slice(1).map((point, index) => {
+      const previous = points[index];
 
-    for (let i = 0; i < 5; i += 1) {
-      const yBase = height * (0.22 + i * 0.13);
-      const phase = time * (0.55 + i * 0.08) + i * 1.2;
+      return Math.hypot(point.x - previous.x, point.y - previous.y);
+    });
+    const total = distances.reduce((sum, distance) => sum + distance, 0);
+    let target = total * progress;
 
-      ctx.beginPath();
-      ctx.moveTo(-40, yBase);
+    for (let index = 0; index < distances.length; index += 1) {
+      const distance = distances[index];
 
-      for (let x = 0; x <= width + 40; x += 28) {
-        const y =
-          yBase +
-          Math.sin(x * 0.01 + phase) * (18 + i * 2) +
-          Math.cos(x * 0.02 - phase) * 8;
+      if (target <= distance) {
+        const start = points[index];
+        const end = points[index + 1];
+        const ratio = distance === 0 ? 0 : target / distance;
 
-        ctx.lineTo(x, y);
+        return {
+          x: start.x + (end.x - start.x) * ratio,
+          y: start.y + (end.y - start.y) * ratio,
+        };
       }
 
-      ctx.strokeStyle =
-        i === 3
-          ? "rgba(248,113,113,0.07)"
-          : "rgba(56,189,248,0.09)";
-
-      ctx.lineWidth = i === 3 ? 2.2 : 1.7;
-      ctx.stroke();
+      target -= distance;
     }
 
-    ctx.restore();
+    return points[points.length - 1];
   }
 
-  function drawSoftRings(time: number) {
+  function drawPulse(pulse: RoutePulse, time: number) {
+    const route = CHIAPAS_ROUTES[pulse.routeIndex];
+    const progress = (pulse.delay + time * pulse.speed * 60) % 1;
+    const point = pointOnPolyline(routePoints(route), progress);
+    const isPromo = route.tone === "promo";
+
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-
-    for (let i = 0; i < 3; i += 1) {
-      const progress = (time * 0.12 + i * 0.32) % 1;
-      const radius = 160 + progress * Math.min(width, height) * 0.55;
-      const alpha = (1 - progress) * 0.08;
-
-      ctx.beginPath();
-      ctx.strokeStyle = `rgba(56,189,248,${alpha})`;
-      ctx.lineWidth = 1.2;
-      ctx.arc(width * 0.58, height * 0.46, radius, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
+    ctx.shadowColor = isPromo ? "rgba(252,211,77,0.72)" : "rgba(103,232,249,0.7)";
+    ctx.shadowBlur = 22;
+    ctx.fillStyle = isPromo ? "#FCD34D" : "#67E8F9";
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, isPromo ? 5.5 : 4.5, 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
   }
 
-  function drawParticles() {
+  function drawPlace(label: string, coord: ChiapasCoord, tone: "hub" | "route", time: number) {
+    const point = mapPoint(coord);
+    const isHub = tone === "hub";
+    const pulse = Math.sin(time * 0.85 + point.x * 0.01) * 0.5 + 0.5;
+
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = isHub ? "rgba(255,255,255,0.42)" : "rgba(103,232,249,0.34)";
+    ctx.fillStyle = isHub ? "#FFFFFF" : "#67E8F9";
+    ctx.lineWidth = isHub ? 12 + pulse * 8 : 6 + pulse * 2;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, isHub ? 8 : 4.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fill();
 
-    for (const particle of particles) {
-      ctx.beginPath();
-      ctx.fillStyle = `rgba(165,243,252,${particle.alpha})`;
-      ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-      ctx.fill();
+    if (width > 720) {
+      ctx.font = `${isHub ? "900" : "800"} ${isHub ? 14 : 11}px Inter, Arial, sans-serif`;
+      ctx.fillStyle = isHub ? "rgba(255,255,255,0.92)" : "rgba(226,232,240,0.7)";
+      ctx.fillText(label, point.x + 14, point.y - 12);
     }
 
     ctx.restore();
   }
 
-  function updateScene(time: number) {
-    for (const blob of blobs) {
-      blob.x += blob.vx * 16;
-      blob.y += blob.vy * 16;
+  function drawCinematicSweep(time: number) {
+    const x = width * (0.08 + ((time * 0.022) % 0.84));
 
-      if (blob.x < -0.15 || blob.x > 1.15) blob.vx *= -1;
-      if (blob.y < -0.15 || blob.y > 1.15) blob.vy *= -1;
-
-      blob.radius = blob.baseRadius + Math.sin(time + blob.phase) * 18;
-    }
-
-    for (const particle of particles) {
-      particle.x += particle.vx;
-      particle.y += particle.vy;
-
-      if (particle.x < -20) particle.x = width + 20;
-      if (particle.x > width + 20) particle.x = -20;
-      if (particle.y < -20) particle.y = height + 20;
-      if (particle.y > height + 20) particle.y = -20;
-    }
+    ctx.save();
+    const gradient = ctx.createLinearGradient(x - 180, 0, x + 180, 0);
+    gradient.addColorStop(0, "rgba(103,232,249,0)");
+    gradient.addColorStop(0.5, "rgba(103,232,249,0.08)");
+    gradient.addColorStop(1, "rgba(103,232,249,0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(x - 180, 0, 360, height);
+    ctx.restore();
   }
 
   function render(now: number) {
     const time = now * 0.001;
 
     ctx.clearRect(0, 0, width, height);
+    drawBackground(time);
+    drawMapShell(time);
+    drawCinematicSweep(time);
 
-    const background = ctx.createLinearGradient(0, 0, width, height);
-    background.addColorStop(0, "rgba(5,7,10,0.92)");
-    background.addColorStop(0.48, "rgba(8,18,28,0.9)");
-    background.addColorStop(1, "rgba(5,7,10,0.96)");
-
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, width, height);
-
-    drawSoftRings(time);
-    drawWaves(time);
-
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    for (const blob of blobs) {
-      drawBlob(blob, time);
-    }
-    ctx.restore();
-
-    drawParticles();
-    updateScene(time);
+    CHIAPAS_ROUTES.forEach((route, index) => drawRoute(route, time, index));
+    pulses.forEach((pulse) => drawPulse(pulse, time));
+    drawPlace(CHIAPAS_PLACES.comitan.label, CHIAPAS_PLACES.comitan.coord, "hub", time);
+    CHIAPAS_ROUTES.forEach((route) => {
+      drawPlace(route.label, route.coords[route.coords.length - 1], "route", time);
+    });
 
     frame = window.requestAnimationFrame(render);
   }

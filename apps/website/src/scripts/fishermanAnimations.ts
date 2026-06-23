@@ -1,7 +1,8 @@
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
+import { MotionPathPlugin } from "gsap/MotionPathPlugin";
 
-gsap.registerPlugin(ScrollTrigger);
+gsap.registerPlugin(ScrollTrigger, MotionPathPlugin);
 
 const prefersReducedMotion = window.matchMedia(
   "(prefers-reduced-motion: reduce)",
@@ -104,6 +105,201 @@ function initBaseAnimations() {
         scrub: 1.1,
       },
     });
+  });
+}
+
+function initIntroAnimation() {
+  const intro = document.querySelector<HTMLElement>("[data-fisherman-intro]");
+
+  if (!intro || intro.dataset.initialized === "true") return;
+
+  intro.dataset.initialized = "true";
+
+  const skipButton = intro.querySelector<HTMLButtonElement>("[data-intro-skip]");
+  const routes = gsap.utils.toArray<SVGPathElement>("[data-intro-route]");
+  const nodes = gsap.utils.toArray<SVGCircleElement>("[data-intro-node]");
+  const shipments = gsap.utils.toArray<SVGGElement>("[data-intro-shipment]");
+  const hub = intro.querySelector<SVGGElement>("[data-intro-hub]");
+  const mapViewport = intro.querySelector<SVGGElement>("[data-intro-map-viewport]");
+  const brand = intro.querySelector<HTMLElement>("[data-intro-brand]");
+  const lines = gsap.utils.toArray<HTMLElement>("[data-intro-line]");
+
+  const finishIntro = () => {
+    intro.dataset.done = "true";
+    intro.setAttribute("aria-hidden", "true");
+    window.setTimeout(() => {
+      intro.remove();
+    }, 700);
+  };
+
+  if (prefersReducedMotion) {
+    finishIntro();
+    return;
+  }
+
+  for (const route of routes) {
+    const length = route.getTotalLength();
+    route.style.strokeDasharray = `${length}`;
+    route.style.strokeDashoffset = `${length}`;
+  }
+
+  gsap.set(nodes, {
+    scale: 0,
+    transformOrigin: "center",
+  });
+
+  gsap.set(shipments, {
+    opacity: 0,
+    transformOrigin: "center",
+  });
+
+  gsap.set(hub, {
+    opacity: 0,
+    scale: 0.76,
+    transformOrigin: "center",
+  });
+
+  gsap.set(mapViewport, {
+    scale: 1.62,
+    x: -230,
+    y: -122,
+    rotation: -0.35,
+    transformOrigin: "586.6px 306px",
+  });
+
+  gsap.set(brand, {
+    opacity: 0,
+    y: 22,
+    scale: 0.94,
+    filter: "blur(14px)",
+  });
+
+  gsap.set(lines, {
+    opacity: 0,
+    y: 20,
+    filter: "blur(10px)",
+  });
+
+  const timeline = gsap.timeline({
+    defaults: {
+      ease: "power4.out",
+    },
+    onComplete: finishIntro,
+  });
+
+  timeline
+    .fromTo(
+      intro,
+      { opacity: 1 },
+      { opacity: 1, duration: 0.1 },
+    )
+    .to(
+      mapViewport,
+      {
+        scale: 1,
+        x: 0,
+        y: 0,
+        rotation: 0,
+        duration: 3.4,
+        ease: "power3.inOut",
+      },
+      0,
+    )
+    .to(routes, {
+      strokeDashoffset: 0,
+      duration: 3.05,
+      stagger: 0.28,
+      ease: "power3.inOut",
+    }, 0.35)
+    .to(
+      nodes,
+      {
+        scale: 1,
+        duration: 0.76,
+        stagger: 0.075,
+        ease: "back.out(1.85)",
+      },
+      "-=1.65",
+    )
+    .to(
+      hub,
+      {
+        opacity: 1,
+        scale: 1,
+        duration: 0.92,
+        ease: "back.out(1.35)",
+      },
+      "-=0.82",
+    )
+    .to(
+      shipments,
+      {
+        opacity: 1,
+        duration: 0.34,
+      },
+      "-=0.62",
+    )
+    .to(
+      shipments[0],
+      {
+        motionPath: {
+          path: routes[0],
+          align: routes[0],
+          alignOrigin: [0.5, 0.5],
+        },
+        duration: 2.2,
+        ease: "power3.inOut",
+      },
+      "-=0.2",
+    )
+    .to(
+      shipments[1],
+      {
+        motionPath: {
+          path: routes[1],
+          align: routes[1],
+          alignOrigin: [0.5, 0.5],
+        },
+        duration: 2.35,
+        ease: "power3.inOut",
+      },
+      "<0.28",
+    )
+    .to(
+      brand,
+      {
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        filter: "blur(0px)",
+        duration: 1.05,
+      },
+      "-=1.05",
+    )
+    .to(
+      lines,
+      {
+        opacity: 1,
+        y: 0,
+        filter: "blur(0px)",
+        duration: 0.86,
+        stagger: 0.14,
+      },
+      "-=0.72",
+    )
+    .to(
+      intro,
+      {
+        clipPath: "inset(0 0 100% 0)",
+        opacity: 0,
+        duration: 1.15,
+        ease: "power4.inOut",
+      },
+      "+=1.65",
+    );
+
+  skipButton?.addEventListener("click", () => {
+    timeline.progress(1);
   });
 }
 
@@ -449,6 +645,7 @@ function initEpicCanvas() {
 }
 
 function initFishermanAnimations() {
+  initIntroAnimation();
   initBaseAnimations();
   initEpicCanvas();
 }
